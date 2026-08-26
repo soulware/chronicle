@@ -250,3 +250,8 @@ the outcome, not time alone. With `(entity, status, timestamp, HEAD sha, dirty)`
 per observation: same sha and same dirty state with a flipped outcome means
 nothing in the code changed, so the cause was external or flaky; a different sha
 with no session of yours in between means someone else fixed it.
+
+## License
+
+Dual licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT),
+at your option.
