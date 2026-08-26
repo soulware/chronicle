@@ -23,5 +23,10 @@ if [[ -f "$dir/start" ]]; then
   [[ -n "$start" ]] && msg+="  ·  $(ts_fmt_dur $((now - start))) into session"
 fi
 
+# Stop takes additionalContext, but its meaning there is feedback the model is
+# expected to act on, which keeps the turn open. The time is left in state for
+# the next turn stamp to report instead.
+[[ -d "$dir" ]] && print -r -- $now > "$dir/stop"
+
 jq -nc --arg m "$msg" '{systemMessage: $m}'
 exit 0

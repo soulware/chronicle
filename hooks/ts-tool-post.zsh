@@ -4,7 +4,8 @@
 # event and the two differ only in outcome.
 #
 # dur spans the pre-hook to here, so it covers queuing and permission waits as
-# well as execution. The payload's own duration_ms covers execution alone.
+# well as execution. exec carries the payload's duration_ms, which is execution
+# alone, so the difference between the two is the wait.
 # TS_TOOL_MIN sets the seconds a call must reach to appear in the scrollback.
 # A failure appears whatever its duration.
 emulate -L zsh
@@ -19,7 +20,9 @@ event=$(print -r -- "$payload" | jq -r '.hook_event_name // "PostToolUse"' 2>/de
 [[ "$event" == "PostToolUseFailure" ]] && failed=1 || failed=0
 
 f="${TS_STATE_DIR}/${session}/tool-$id"
-attrs="end=\"$(ts_now_clock)\""
+ms=$(print -r -- "$payload" | jq -r '.duration_ms // empty' 2>/dev/null)
+
+attrs="end=\"$(ts_now_iso)\""
 (( failed )) && attrs+=" outcome=\"failed\""
 msg=""
 
@@ -30,6 +33,12 @@ if [[ -f "$f" ]]; then
     typeset -F secs=$((EPOCHREALTIME - start))
     dur=$(ts_fmt_dur $secs)
     attrs+=" dur=\"$dur\""
+    # exec is the payload's own execution time. dur minus exec is the wait,
+    # which reads as presence rather than as a slow command.
+    if [[ "$ms" == <-> ]]; then
+      typeset -F e=$((ms / 1000.0))
+      attrs+=" exec=\"$(ts_fmt_dur $e)\""
+    fi
     show=0
     (( secs >= ${TS_TOOL_MIN:-0} )) && show=1
     (( failed )) && show=1

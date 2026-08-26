@@ -22,13 +22,15 @@ cache prefix on every turn.
 `UserPromptSubmit` stamps the turn:
 
 ```
-<time now="2026-08-26T09:44:31Z" session_elapsed="1h03m" since_last_turn="4m12s"/>
+<time now="2026-08-26T09:44:31Z" session_start="2026-08-26T08:41:19Z"
+      session_elapsed="1h03m" since_last_turn="4m12s"
+      last_turn_dur="2m18s" since_last_stop="1m54s"/>
 ```
 
 `PostToolUse` stamps each tool result:
 
 ```
-<time end="09:43:42" dur="2.8s"/>
+<time end="2026-08-26T09:43:42Z" dur="2.8s" exec="0.4s"/>
 ```
 
 `PostToolUseFailure` stamps a call that failed, marking the outcome and showing
@@ -36,11 +38,17 @@ in the scrollback whatever `TS_TOOL_MIN` says, on the grounds that a failure is
 always worth seeing:
 
 ```
-<time end="09:43:42" outcome="failed" dur="4m12s"/>
+<time end="2026-08-26T09:43:42Z" outcome="failed" dur="4m12s"/>
 ```
 
-`Stop` closes the turn in the scrollback alone, since by then the model has
-stopped and nothing more reaches it this turn.
+`Stop` closes the turn in the scrollback and records when the model stopped.
+It takes `additionalContext`, but the meaning there is feedback the model is
+expected to act on, which holds the turn open, so the time goes to state and
+the next turn stamp reports it as `last_turn_dur` and `since_last_stop`.
+
+Those two matter because `since_last_turn` holds the model's own work and the
+user's pause as one number. Split, `since_last_stop` is the user's gap alone,
+which is what says whether anyone is at the keyboard.
 
 `StopFailure` fires when a turn ends on an API error, where `Stop` stays silent.
 It renders nothing itself, so it leaves a note that the next turn stamp reports
@@ -50,10 +58,23 @@ and clears:
 <time now="..." session_elapsed="..." previous_turn_failed="overloaded_error"/>
 ```
 
-Every stamp is UTC, so a transcript reads the same wherever it was recorded and
-whatever the machine's clock was set to. The date lives on the turn stamp so the
-tool stamps stay short. Deltas are
-precomputed because subtracting ISO timestamps in-context is error-prone.
+`SessionStart` opens the session and names the commit doing the stamping:
+
+```
+<time now="2026-08-26T09:44:31Z" session_source="resume" chronicle="03d949b"/>
+```
+
+Hooks installed mid-session leave the earlier calls unstamped, which reads the
+same as a tool the hooks skip. The version marker separates the two.
+
+Every stamp is UTC and carries its date, so a fragment reads the same in an
+excerpt, across midnight, or on the far side of a compaction that took the
+anchoring turn stamp with it. Deltas are precomputed because subtracting ISO
+timestamps in-context is error-prone.
+
+`dur` is the whole time a call was outstanding and `exec` is the payload's own
+execution time, so the difference between them is queuing and approval wait.
+A large gap between the two is a presence signal rather than a slow command.
 
 Interleaving stamps between tool results is cache-safe. The cache breaks on
 rewriting earlier content, not on appending between it, and each stamp is
@@ -197,14 +218,16 @@ Confirmed against a live install on 2026-08-26.
   shape and is accepted, so the schema quoted in that error is abbreviated
   rather than exhaustive.
 - The compaction payload names the trigger `trigger`.
+- `Stop` reaches the model through `additionalContext`, but the field means
+  feedback to act on and keeps the turn open, so a duration cannot ride it.
 - A compaction appends a second `compact_boundary` record and leaves every
   earlier record in place, so the transcript holds each seam in order.
 
 `dur` spans the pre-hook to the post-hook, so it covers the whole time the call
 was outstanding: queuing and permission waits included. One `sed` measured 45ms
 of execution against 3.7s of `dur`, the difference being a permission prompt.
-Read it as latency paid, which is what the transcript position implies anyway.
-The payload's `duration_ms` holds the execution time alone.
+Both numbers are emitted, `dur` and `exec`, so the wait is readable as its own
+quantity.
 
 ## Later
 

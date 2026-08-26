@@ -46,6 +46,12 @@ print -r -- "$PROMPT" | "$D/ts-turn.zsh"
 echo "=== stop (end of turn) ==="
 print -r -- '{"session_id":"test-sess","hook_event_name":"Stop","last_assistant_message":"done"}' | "$D/ts-stop.zsh"
 
+echo "=== the next turn splits the gap into model time and user time ==="
+sleep 1
+print -r -- "$PROMPT" | "$D/ts-turn.zsh" | jq -r .hookSpecificOutput.additionalContext
+echo "  (want last_turn_dur from the stop above, and since_last_stop ~1s)"
+echo "  stop cleared: $(ls "$TS_STATE_DIR/test-sess" | grep -c '^stop$' || true) (want 0)"
+
 echo "=== tool failure: stamped, and its start entry cleared ==="
 FAILP='{"session_id":"test-sess","tool_use_id":"toolu_FAIL","tool_name":"Bash","tool_input":{"command":"boom"}}'
 print -r -- "$FAILP" | "$D/ts-tool-pre.zsh"

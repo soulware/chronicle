@@ -19,22 +19,36 @@ now=$EPOCHREALTIME
 attrs="now=\"$(ts_now_iso)\""
 msg="$(ts_now_iso)"
 
+# session_start rides every stamp, so an elapsed value converts back to a wall
+# clock even in an excerpt or on the far side of a compaction.
 if [[ -f "$dir/start" ]]; then
   start=$(<"$dir/start")
   elapsed=$(ts_fmt_dur $((now - start)))
-  attrs+=" session_elapsed=\"$elapsed\""
+  attrs+=" session_start=\"$(ts_epoch_to_iso $start)\" session_elapsed=\"$elapsed\""
   msg+="  ·  $elapsed into session"
 else
   print -r -- $now > "$dir/start"
-  attrs+=" session_elapsed=\"0s\""
+  attrs+=" session_start=\"$(ts_now_iso)\" session_elapsed=\"0s\""
   msg+="  ·  session start"
 fi
 
+prev_turn=""
 if [[ -f "$dir/turn" ]]; then
-  last=$(<"$dir/turn")
-  gap=$(ts_fmt_dur $((now - last)))
+  prev_turn=$(<"$dir/turn")
+  gap=$(ts_fmt_dur $((now - prev_turn)))
   attrs+=" since_last_turn=\"$gap\""
   msg+="  ·  +$gap since last turn"
+fi
+
+# The turn gap holds the model's own work and the user's pause as one number.
+# The stop time splits it, so each side is reported separately.
+if [[ -f "$dir/stop" ]]; then
+  stop=$(<"$dir/stop")
+  rm -f "$dir/stop"
+  if [[ -n "$stop" ]]; then
+    [[ -n "$prev_turn" ]] && attrs+=" last_turn_dur=\"$(ts_fmt_dur $((stop - prev_turn)))\""
+    attrs+=" since_last_stop=\"$(ts_fmt_dur $((now - stop)))\""
+  fi
 fi
 
 if [[ -f "$dir/turnfail" ]]; then
