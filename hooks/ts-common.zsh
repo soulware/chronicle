@@ -5,12 +5,12 @@ zmodload zsh/datetime
 : ${TS_STATE_DIR:=${HOME}/.claude/hooks/state}
 
 ts_now_iso() {
-  local stamp
-  stamp=$(strftime '%Y-%m-%dT%H:%M:%S%z' $EPOCHSECONDS)
-  print -r -- "${stamp[1,-3]}:${stamp[-2,-1]}"
+  local -x TZ=UTC
+  strftime '%Y-%m-%dT%H:%M:%SZ' $EPOCHSECONDS
 }
 
 ts_now_clock() {
+  local -x TZ=UTC
   strftime '%H:%M:%S' $EPOCHSECONDS
 }
 

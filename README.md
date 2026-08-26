@@ -22,16 +22,18 @@ cache prefix on every turn.
 `UserPromptSubmit` stamps the turn:
 
 ```
-<time now="2026-08-26T10:44:31+01:00" session_elapsed="1h03m" since_last_turn="4m12s"/>
+<time now="2026-08-26T09:44:31Z" session_elapsed="1h03m" since_last_turn="4m12s"/>
 ```
 
 `PostToolUse` stamps each tool result:
 
 ```
-<time end="10:43:42" dur="2.8s"/>
+<time end="09:43:42" dur="2.8s"/>
 ```
 
-The date lives on the turn stamp so the tool stamps stay short. Deltas are
+Every stamp is UTC, so a transcript reads the same wherever it was recorded and
+whatever the machine's clock was set to. The date lives on the turn stamp so the
+tool stamps stay short. Deltas are
 precomputed because subtracting ISO timestamps in-context is error-prone.
 
 Interleaving stamps between tool results is cache-safe. The cache breaks on
@@ -45,8 +47,8 @@ the terminal as a top-level `systemMessage`, so a long session stays scannable
 by eye:
 
 ```
-2026-08-26T11:39:11+01:00  ·  20m21s into session  ·  +2m06s since last turn
-2026-08-26T11:39:26+01:00  ·  3.1s
+2026-08-26T10:39:11Z  ·  20m21s into session  ·  +2m06s since last turn
+2026-08-26T10:39:26Z  ·  3.1s
 ```
 
 Claude Code prefixes each of these with the event and tool, as
