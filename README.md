@@ -31,6 +31,9 @@ cache prefix on every turn.
 <time end="09:43:42" dur="2.8s"/>
 ```
 
+`Stop` closes the turn in the scrollback alone, since by then the model has
+stopped and nothing more reaches it this turn.
+
 Every stamp is UTC, so a transcript reads the same wherever it was recorded and
 whatever the machine's clock was set to. The date lives on the turn stamp so the
 tool stamps stay short. Deltas are
@@ -49,6 +52,7 @@ by eye:
 ```
 2026-08-26T10:39:11Z  ·  20m21s into session  ·  +2m06s since last turn
 2026-08-26T10:39:26Z  ·  3.1s
+2026-08-26T10:39:30Z  ·  turn took 2m14s  ·  20m25s into session
 ```
 
 Claude Code prefixes each of these with the event and tool, as
@@ -90,7 +94,10 @@ State lives in `~/.claude/hooks/state/<session_id>/`, overridable with
 
 Then open `/hooks` once, or restart, so the config watcher reloads.
 
-`install.sh` symlinks the three entry points into `~/.claude/hooks/`, so editing
+Re-running `install.sh` replaces chronicle's own entries rather than stacking a
+second copy, and leaves every other hook alone.
+
+`install.sh` symlinks the four entry points into `~/.claude/hooks/`, so editing
 this repo changes hook behaviour on the next fire. `ts-common.zsh` is reached
 through zsh's `:A` modifier, which resolves the symlink back to this directory,
 so it stays where it is. Keep this checkout in place while the hooks are

@@ -43,6 +43,9 @@ echo "=== turn 2 (deltas populated) ==="
 sleep 1
 print -r -- "$PROMPT" | "$D/ts-turn.zsh"
 
+echo "=== stop (end of turn) ==="
+print -r -- '{"session_id":"test-sess","hook_event_name":"Stop","last_assistant_message":"done"}' | "$D/ts-stop.zsh"
+
 echo "=== malformed stdin must not break the turn ==="
 print -r -- 'not json' | "$D/ts-tool-post.zsh"; echo "exit=$?"
 

@@ -12,21 +12,25 @@ S="$HOME/.claude/settings.json"
 
 # Linked, not copied, so edits in this repo take effect on the next hook fire.
 # ts-common.zsh is found through zsh's :A modifier, which resolves the symlink
-# back to this directory, so only the three entry points need linking.
+# back to this directory, so only the entry points need linking.
 mkdir -p "$H"
 chmod +x "$SRC"/ts-*.zsh
-for s in ts-turn ts-tool-pre ts-tool-post; do
+for s in ts-turn ts-tool-pre ts-tool-post ts-stop; do
   ln -sf "$SRC/$s.zsh" "$H/$s.zsh"
 done
 
 cp "$S" "$S.pre-chronicle"
 
+# Chronicle's own entries are stripped first, so re-running replaces them
+# rather than stacking a second copy.
 jq --arg h "$H" '
-  .hooks = ((.hooks // {}) + {
-    "PreToolUse":       ((.hooks.PreToolUse       // []) + [{"hooks":[{"type":"command","command":($h+"/ts-tool-pre.zsh")}]}]),
-    "PostToolUse":      ((.hooks.PostToolUse      // []) + [{"hooks":[{"type":"command","command":($h+"/ts-tool-post.zsh")}]}]),
-    "UserPromptSubmit": ((.hooks.UserPromptSubmit // []) + [{"hooks":[{"type":"command","command":($h+"/ts-turn.zsh")}]}])
-  })
+  def strip: map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop)\\.zsh$")) | not));
+  def entry($n): {"hooks":[{"type":"command","command":($h+"/"+$n+".zsh")}]};
+  .hooks = (.hooks // {})
+  | .hooks.PreToolUse       = ((.hooks.PreToolUse       // []) | strip) + [entry("ts-tool-pre")]
+  | .hooks.PostToolUse      = ((.hooks.PostToolUse      // []) | strip) + [entry("ts-tool-post")]
+  | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) | strip) + [entry("ts-turn")]
+  | .hooks.Stop             = ((.hooks.Stop             // []) | strip) + [entry("ts-stop")]
 ' "$S" > "$S.new"
 
 jq -e . "$S.new" > /dev/null
