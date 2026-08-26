@@ -150,9 +150,17 @@ t_match "elapsed is no longer zero"   "$c" 'session_elapsed="[0-9]'
 print -r -- "=== stop closes the turn in the scrollback and nowhere else ==="
 out=$(print -r -- '{"session_id":"test-sess","hook_event_name":"Stop","last_assistant_message":"done"}' | "$D/ts-stop.zsh")
 t_json   "stop emits valid json"      "$out"
-t_match  "stop reports the turn cost" "$(msg_of "$out")" 'turn took'
+t_match  "stop stamps the time"       "$(msg_of "$out")" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z'
+t_match  "stop reports session elapsed" "$(msg_of "$out")" 'into session'
+# showTurnDuration is a Claude Code setting that defaults to on and already
+# draws the turn duration after every turn. Printing it again would put the
+# same number twice on adjacent lines.
+t_absent "the duration is left to the built-in" "$(msg_of "$out")" 'turn took'
 # Context here would read as feedback to act on, which holds the turn open.
 t_eq     "stop sends the model nothing" "$(ctx_of "$out")" ""
+# The message is cosmetic, this is not: the next turn stamp reads this mark to
+# tell the model's work from the user's pause.
+t_eq     "stop leaves its mark"       "$(state '^stop$')" "1"
 
 print -r -- "=== the next turn splits model time from user time ==="
 sleep 1

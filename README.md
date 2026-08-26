@@ -46,6 +46,11 @@ It takes `additionalContext`, but the meaning there is feedback the model is
 expected to act on, which holds the turn open, so the time goes to state and
 the next turn stamp reports it as `last_turn_dur` and `since_last_stop`.
 
+Its scrollback line does not report how long the turn took. Claude Code's own
+`showTurnDuration` setting defaults to on and already draws that after every
+turn, so the line carries only what the built-in one does not: the absolute
+time, and how far into the session the turn ended.
+
 Those two matter because `since_last_turn` holds the model's own work and the
 user's pause as one number. Split, `since_last_stop` is the user's gap alone,
 which is what says whether anyone is at the keyboard.
@@ -89,7 +94,7 @@ by eye:
 ```
 2026-08-26T10:39:11Z  ·  20m21s into session  ·  +2m06s since last turn
 2026-08-26T10:39:26Z  ·  3.1s
-2026-08-26T10:39:30Z  ·  turn took 2m14s  ·  20m25s into session
+2026-08-26T10:39:30Z  ·  20m25s into session
 ```
 
 Claude Code prefixes each of these with the event and tool, as
@@ -302,6 +307,13 @@ call, resolved the other way one level up.
 
 Those records also make the case for the whole thing, since they sit on disk
 carrying exactly the duration the model cannot see.
+
+Two settings render time in the terminal, and neither reaches the model.
+`showTurnDuration` defaults to on and draws a turn duration after every turn,
+which is why the `Stop` line here does not. `showMessageTimestamps` defaults to
+off and stamps each message with its arrival time, which overlaps these stamps
+in the scrollback if it is turned on. Both are REPL rendering, so neither
+changes what the model is given.
 
 ## Later
 

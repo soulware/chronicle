@@ -1,5 +1,13 @@
 #!/bin/zsh
-# Stop: close the turn in the scrollback with the time and what the turn cost.
+# Stop: close the turn in the scrollback, and leave the mark that lets the next
+# turn stamp separate the model's work from the user's pause.
+#
+# The duration of the turn is not reported here. Claude Code's own
+# showTurnDuration setting defaults to on and already draws a "Cooked for Nm Ns"
+# line after every turn, so printing it again would put the same number twice on
+# adjacent lines. What is left is what the built-in line does not carry: the
+# absolute time, and how far into the session this turn ended.
+#
 # Emits systemMessage alone. A Stop hook that blocks can trap the session in a
 # loop, so this one never sets block.
 emulate -L zsh
@@ -12,11 +20,6 @@ session=${session//[^A-Za-z0-9_-]/_}
 dir="${TS_STATE_DIR}/${session}"
 now=$EPOCHREALTIME
 msg="$(ts_now_iso)"
-
-if [[ -f "$dir/turn" ]]; then
-  turn=$(<"$dir/turn")
-  [[ -n "$turn" ]] && msg+="  ·  turn took $(ts_fmt_dur $((now - turn)))"
-fi
 
 if [[ -f "$dir/start" ]]; then
   start=$(<"$dir/start")
