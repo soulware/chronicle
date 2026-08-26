@@ -164,12 +164,18 @@ State lives in `~/.claude/hooks/state/<session_id>/`, overridable with
 ./uninstall.sh
 ```
 
+`jq` is required. Every hook pipes through it and each silences its own errors,
+so `install.sh` checks for it up front rather than installing something that
+would run cleanly and never stamp anything. A machine with no `settings.json`
+yet starts from an empty object, and no backup is taken, there being nothing to
+restore.
+
 Then open `/hooks` once, or restart, so the config watcher reloads.
 
 Re-running `install.sh` replaces chronicle's own entries rather than stacking a
 second copy, and leaves every other hook alone.
 
-`install.sh` symlinks the four entry points into `~/.claude/hooks/`, so editing
+`install.sh` symlinks the eight entry points into `~/.claude/hooks/`, so editing
 this repo changes hook behaviour on the next fire. `ts-common.zsh` is reached
 through zsh's `:A` modifier, which resolves the symlink back to this directory,
 so it stays where it is. Keep this checkout in place while the hooks are
@@ -189,9 +195,22 @@ arbitrary code execution and that is Claude Code rewriting its own config.
 zsh hooks/ts-test.zsh
 ```
 
-Covers every branch of the duration formatter, first turn, populated deltas, a
-2.4s tool call, a post with no matching pre, two concurrent calls, malformed
-stdin, and the latency of a pair.
+Asserts on what each hook emits and exits non-zero on any failure, so it can
+gate a release or run against a new Claude Code version.
+
+It covers every branch of the duration formatter, the first turn and one with
+populated deltas, a timed tool call, `duration_ms` becoming `exec`, a post with
+no matching pre, two concurrent calls, a failed call, a turn dying on an API
+error, the compaction boundary and its deferred marker, a hostile payload, and
+malformed stdin.
+
+Two of those matter more than the rest, because both fail silently in normal
+use. One is that each event still accepts what it is given: which events carry
+`hookSpecificOutput` is not documented anywhere, and the delivery design rests
+on the answers. The other is the compaction parser, which reads the transcript
+JSONL directly. Its fixture ends with record types the parser has never been
+taught, and the prompt count has to stay put; if it moves, the format changed
+underneath it.
 
 ## Measured behaviour
 
