@@ -45,3 +45,19 @@ ts_emit() {
       '{hookSpecificOutput: {hookEventName: $e, additionalContext: $c}}'
   fi
 }
+
+# A compaction leaves a marker for the model, but PostCompact rejects
+# hookSpecificOutput, so delivery falls to a later event that accepts it.
+# Whichever one gets there first clears the marker.
+ts_take_compaction() {
+  local f=$1/compaction tp=$2
+  [[ -f "$f" ]] || return 1
+  local from trigger prompts
+  IFS='|' read -r from trigger prompts < "$f"
+  rm -f "$f"
+  local attrs="covered_from=\"$from\" trigger=\"$trigger\" prompts=\"$prompts\""
+  local start=$(ts_iso_to_epoch "$from")
+  [[ -n "$start" ]] && attrs+=" span=\"$(ts_fmt_dur $((EPOCHSECONDS - start)))\""
+  [[ -n "$tp" ]] && attrs+=" transcript=\"$tp\""
+  print -r -- "<compaction $attrs/>"
+}

@@ -98,13 +98,18 @@ each record carries an ISO timestamp with milliseconds in its envelope. The
 detail is durable and finer-grained than anything these hooks emit. What
 compaction takes away is reach, not the record.
 
-So the pair marks the boundary rather than trying to carry detail across it.
+So the hooks mark the boundary rather than trying to carry detail across it.
 `PreCompact` measures the stretch about to be folded up and writes it to state,
 since anything it returns is subject to that same compaction. `PostCompact`
-reports it on the far side:
+reports the span in the scrollback.
+
+`PostCompact` rejects `hookSpecificOutput`, so it takes no context and the
+marker for the model stays in state. The first event that accepts context
+claims it and clears it: `SessionStart` where it fires, otherwise the next turn
+stamp.
 
 ```
-<compaction at="2026-08-26T11:53:15Z" trigger="manual" covered_from="2026-08-26T10:17:26.904Z"
+<compaction covered_from="2026-08-26T10:17:26.904Z" trigger="manual"
             prompts="25" span="1h35m" transcript="/Users/…/<session>.jsonl"/>
 ```
 
@@ -187,6 +192,13 @@ Confirmed against a live install on 2026-08-26.
   `Agent` call, stamped at launch rather than at completion.
 - The completion notification for a background task carries no time of its own.
   The following turn stamp is what bounds when it landed.
+- `PostCompact` accepts `systemMessage` and rejects `hookSpecificOutput`, which
+  it reports as `(root): Invalid input`. `PostToolUseFailure` takes the same
+  shape and is accepted, so the schema quoted in that error is abbreviated
+  rather than exhaustive.
+- The compaction payload names the trigger `trigger`.
+- A compaction appends a second `compact_boundary` record and leaves every
+  earlier record in place, so the transcript holds each seam in order.
 
 `dur` spans the pre-hook to the post-hook, so it covers the whole time the call
 was outstanding: queuing and permission waits included. One `sed` measured 45ms

@@ -70,8 +70,21 @@ TR="$TS_STATE_DIR/fake-transcript.jsonl"
 jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PreCompact",trigger_reason:"manual"}' | "$D/ts-precompact.zsh" > /dev/null
 echo "  state: $(cat "$TS_STATE_DIR/test-sess/compaction")"
 echo "  (expect the 09:30 boundary and 2 prompts, the tool result excluded)"
-jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/ts-postcompact.zsh" | jq -r .hookSpecificOutput.additionalContext
-echo "  cleared: $(ls "$TS_STATE_DIR/test-sess" | grep -c compaction || true)"
+echo "  PostCompact scrollback (this event takes no context, so the marker stays):"
+jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/ts-postcompact.zsh" | jq -r .systemMessage
+echo "  still pending: $(ls "$TS_STATE_DIR/test-sess" | grep -c compaction || true) (want 1)"
+
+echo "=== SessionStart delivers the marker and clears it ==="
+jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"SessionStart",source:"compact"}' \
+  | "$D/ts-session-start.zsh" | jq -r .hookSpecificOutput.additionalContext
+echo "  cleared: $(ls "$TS_STATE_DIR/test-sess" | grep -c compaction || true) (want 0)"
+jq -nc '{session_id:"test-sess",hook_event_name:"SessionStart",source:"resume"}' \
+  | "$D/ts-session-start.zsh" | jq -r .hookSpecificOutput.additionalContext
+
+echo "=== a marker left undelivered rides the next turn stamp ==="
+jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh" > /dev/null
+print -r -- "$PROMPT" | "$D/ts-turn.zsh" | jq -r .hookSpecificOutput.additionalContext
+echo "  cleared: $(ls "$TS_STATE_DIR/test-sess" | grep -c compaction || true) (want 0)"
 
 echo "=== malformed stdin must not break the turn ==="
 print -r -- 'not json' | "$D/ts-tool-post.zsh"; echo "exit=$?"

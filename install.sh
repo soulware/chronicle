@@ -15,7 +15,7 @@ S="$HOME/.claude/settings.json"
 # back to this directory, so only the entry points need linking.
 mkdir -p "$H"
 chmod +x "$SRC"/ts-*.zsh
-for s in ts-turn ts-tool-pre ts-tool-post ts-stop ts-stop-fail ts-precompact ts-postcompact; do
+for s in ts-turn ts-tool-pre ts-tool-post ts-stop ts-stop-fail ts-precompact ts-postcompact ts-session-start; do
   ln -sf "$SRC/$s.zsh" "$H/$s.zsh"
 done
 
@@ -26,7 +26,7 @@ done
 # Chronicle's own entries are stripped first, so re-running replaces them
 # rather than stacking a second copy.
 jq --arg h "$H" '
-  def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop|stop-fail|precompact|postcompact)\\.zsh$")) | not));
+  def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop|stop-fail|precompact|postcompact|session-start)\\.zsh$")) | not));
   def entry($n): {"hooks":[{"type":"command","command":($h+"/"+$n+".zsh")}]};
   .hooks = (.hooks // {})
   | .hooks.PreToolUse       = ((.hooks.PreToolUse       // []) | strip) + [entry("ts-tool-pre")]
@@ -37,6 +37,7 @@ jq --arg h "$H" '
   | .hooks.StopFailure      = ((.hooks.StopFailure      // []) | strip) + [entry("ts-stop-fail")]
   | .hooks.PreCompact       = ((.hooks.PreCompact       // []) | strip) + [entry("ts-precompact")]
   | .hooks.PostCompact      = ((.hooks.PostCompact      // []) | strip) + [entry("ts-postcompact")]
+  | .hooks.SessionStart     = ((.hooks.SessionStart     // []) | strip) + [entry("ts-session-start")]
 ' "$S" > "$S.new"
 
 jq -e . "$S.new" > /dev/null

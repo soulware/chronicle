@@ -6,7 +6,7 @@ H="$HOME/.claude/hooks"
 S="$HOME/.claude/settings.json"
 
 jq '
-  def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop|stop-fail|precompact|postcompact)\\.zsh$")) | not));
+  def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop|stop-fail|precompact|postcompact|session-start)\\.zsh$")) | not));
   .hooks.PreToolUse       |= strip
   | .hooks.PostToolUse      |= strip
   | .hooks.UserPromptSubmit |= strip
@@ -23,7 +23,7 @@ jq -e . "$S.new" > /dev/null
 mv "$S.new" "$S"
 
 # ts-common.zsh is only present if an older copy-based install put it there.
-rm -f "$H"/ts-common.zsh "$H"/ts-turn.zsh "$H"/ts-tool-pre.zsh "$H"/ts-tool-post.zsh "$H"/ts-stop.zsh "$H"/ts-stop-fail.zsh "$H"/ts-precompact.zsh "$H"/ts-postcompact.zsh
+rm -f "$H"/ts-common.zsh "$H"/ts-turn.zsh "$H"/ts-tool-pre.zsh "$H"/ts-tool-post.zsh "$H"/ts-stop.zsh "$H"/ts-stop-fail.zsh "$H"/ts-precompact.zsh "$H"/ts-postcompact.zsh "$H"/ts-session-start.zsh
 rm -rf "$H/state"
 
 echo "removed. open /hooks once (or restart) so the config watcher reloads."

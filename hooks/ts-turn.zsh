@@ -8,6 +8,7 @@ source "${0:A:h}/ts-common.zsh"
 payload=$(cat)
 session=$(print -r -- "$payload" | jq -r '.session_id // "unknown"' 2>/dev/null)
 session=${session//[^A-Za-z0-9_-]/_}
+tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
 
 dir="${TS_STATE_DIR}/${session}"
 mkdir -p "$dir" || exit 0
@@ -45,5 +46,8 @@ fi
 
 print -r -- $now > "$dir/turn"
 
-ts_emit UserPromptSubmit "<time $attrs/>" "$msg"
+ctx="<time $attrs/>"
+marker=$(ts_take_compaction "$dir" "$tp") && ctx+="$marker"
+
+ts_emit UserPromptSubmit "$ctx" "$msg"
 exit 0

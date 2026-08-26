@@ -10,7 +10,7 @@ payload=$(cat)
 session=$(print -r -- "$payload" | jq -r '.session_id // "unknown"' 2>/dev/null)
 session=${session//[^A-Za-z0-9_-]/_}
 tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
-trigger=$(print -r -- "$payload" | jq -r '.trigger_reason // "unknown"' 2>/dev/null)
+trigger=$(print -r -- "$payload" | jq -r '.trigger // .trigger_reason // "unknown"' 2>/dev/null)
 trigger=${trigger//[^A-Za-z0-9_-]/}
 
 dir="${TS_STATE_DIR}/${session}"
