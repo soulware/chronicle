@@ -5,26 +5,30 @@ set -e
 H="$HOME/.claude/hooks"
 S="$HOME/.claude/settings.json"
 
-jq '
-  def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop|stop-fail|precompact|postcompact|session-start)\\.zsh$")) | not));
-  .hooks.PreToolUse       |= strip
-  | .hooks.PostToolUse      |= strip
-  | .hooks.UserPromptSubmit |= strip
-  | .hooks.PostToolUseFailure |= strip
-  | .hooks.Stop             |= strip
-  | .hooks.StopFailure      |= strip
-  | .hooks.PreCompact       |= strip
-  | .hooks.PostCompact      |= strip
-  | .hooks.SessionStart      |= strip
-  | .hooks |= with_entries(select(.value | length > 0))
-  | if (.hooks | length) == 0 then del(.hooks) else . end
-' "$S" > "$S.new"
+# The same manifest install.sh reads, so the two can never fall out of step.
+source "${0:A:h}/hooks/ts-manifest.zsh"
+
+# An event chronicle never touched is left exactly as it was: strip only
+# removes entries whose command points at one of our scripts, and the two
+# passes afterwards drop keys that strip emptied.
+prog='def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test($re)) | not));
+.'
+for e in ${(f)"$(ts_events)"}; do
+  prog+=$'\n'"| .hooks.$e |= strip"
+done
+prog+=$'\n''| .hooks |= with_entries(select(.value | length > 0))
+| if (.hooks | length) == 0 then del(.hooks) else . end'
+
+jq --arg re "$(ts_strip_re)" "$prog" "$S" > "$S.new"
 
 jq -e . "$S.new" > /dev/null
 mv "$S.new" "$S"
 
+for s in ${(f)"$(ts_scripts)"}; do
+  rm -f "$H/$s.zsh"
+done
 # ts-common.zsh is only present if an older copy-based install put it there.
-rm -f "$H"/ts-common.zsh "$H"/ts-turn.zsh "$H"/ts-tool-pre.zsh "$H"/ts-tool-post.zsh "$H"/ts-stop.zsh "$H"/ts-stop-fail.zsh "$H"/ts-precompact.zsh "$H"/ts-postcompact.zsh "$H"/ts-session-start.zsh
+rm -f "$H/ts-common.zsh"
 rm -rf "$H/state"
 
 echo "removed. open /hooks once (or restart) so the config watcher reloads."

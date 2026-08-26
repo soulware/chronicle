@@ -17,12 +17,16 @@ SRC="${0:A:h}/hooks"
 H="$HOME/.claude/hooks"
 S="$HOME/.claude/settings.json"
 
+# Which events exist and which script serves each is written down once, in
+# hooks/ts-manifest.zsh. Everything below is derived from it.
+source "$SRC/ts-manifest.zsh"
+
 # Linked, not copied, so edits in this repo take effect on the next hook fire.
 # ts-common.zsh is found through zsh's :A modifier, which resolves the symlink
 # back to this directory, so only the entry points need linking.
 mkdir -p "$H"
 chmod +x "$SRC"/ts-*.zsh
-for s in ts-turn ts-tool-pre ts-tool-post ts-stop ts-stop-fail ts-precompact ts-postcompact ts-session-start; do
+for s in ${(f)"$(ts_scripts)"}; do
   ln -sf "$SRC/$s.zsh" "$H/$s.zsh"
 done
 
@@ -40,27 +44,22 @@ else
   print -r -- '{}' > "$S.pre-chronicle"
 fi
 
-# Chronicle's own entries are stripped first, so re-running replaces them
-# rather than stacking a second copy.
-jq --arg h "$H" '
-  def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test("/ts-(turn|tool-pre|tool-post|stop|stop-fail|precompact|postcompact|session-start)\\.zsh$")) | not));
-  def entry($n): {"hooks":[{"type":"command","command":($h+"/"+$n+".zsh")}]};
-  .hooks = (.hooks // {})
-  | .hooks.PreToolUse       = ((.hooks.PreToolUse       // []) | strip) + [entry("ts-tool-pre")]
-  | .hooks.PostToolUse      = ((.hooks.PostToolUse      // []) | strip) + [entry("ts-tool-post")]
-  | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) | strip) + [entry("ts-turn")]
-  | .hooks.PostToolUseFailure = ((.hooks.PostToolUseFailure // []) | strip) + [entry("ts-tool-post")]
-  | .hooks.Stop             = ((.hooks.Stop             // []) | strip) + [entry("ts-stop")]
-  | .hooks.StopFailure      = ((.hooks.StopFailure      // []) | strip) + [entry("ts-stop-fail")]
-  | .hooks.PreCompact       = ((.hooks.PreCompact       // []) | strip) + [entry("ts-precompact")]
-  | .hooks.PostCompact      = ((.hooks.PostCompact      // []) | strip) + [entry("ts-postcompact")]
-  | .hooks.SessionStart     = ((.hooks.SessionStart     // []) | strip) + [entry("ts-session-start")]
-' "$S" > "$S.new"
+# One assignment per event, built from the manifest. Chronicle's own entries are
+# stripped first, so re-running replaces them rather than stacking a second copy.
+prog='def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test($re)) | not));
+def entry($n): {"hooks":[{"type":"command","command":($h+"/"+$n+".zsh")}]};
+.hooks = (.hooks // {})'
+for pair in $TS_HOOKS; do
+  event=${pair%%:*} script=${pair#*:}
+  prog+=$'\n'"| .hooks.$event = ((.hooks.$event // []) | strip) + [entry(\"$script\")]"
+done
+
+jq --arg h "$H" --arg re "$(ts_strip_re)" "$prog" "$S" > "$S.new"
 
 jq -e . "$S.new" > /dev/null
 mv "$S.new" "$S"
 
-if [[ -f "$S.pre-chronicle" ]]; then
+if [[ -f "$S.pre-chronicle" && "$(cat "$S.pre-chronicle")" != '{}' ]]; then
   echo "installed. backup at $S.pre-chronicle"
 else
   echo "installed. no backup taken, there were no settings before this."

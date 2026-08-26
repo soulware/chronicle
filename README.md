@@ -175,7 +175,14 @@ Then open `/hooks` once, or restart, so the config watcher reloads.
 Re-running `install.sh` replaces chronicle's own entries rather than stacking a
 second copy, and leaves every other hook alone.
 
-`install.sh` symlinks the eight entry points into `~/.claude/hooks/`, so editing
+`hooks/ts-manifest.zsh` pairs each event with the script that serves it, and is
+the only place that list is written down. `install.sh` and `uninstall.sh` derive
+what to link, what to remove, and how to recognise chronicle's own settings
+entries from it, so adding a hook means adding a line there and nothing else.
+The pairing is not one to one, which is why it cannot be read off the
+filenames: `ts-tool-post` serves both `PostToolUse` and `PostToolUseFailure`.
+
+`install.sh` symlinks those entry points into `~/.claude/hooks/`, so editing
 this repo changes hook behaviour on the next fire. `ts-common.zsh` is reached
 through zsh's `:A` modifier, which resolves the symlink back to this directory,
 so it stays where it is. Keep this checkout in place while the hooks are
@@ -198,7 +205,9 @@ zsh hooks/ts-test.zsh
 Asserts on what each hook emits and exits non-zero on any failure, so it can
 gate a release or run against a new Claude Code version.
 
-It covers every branch of the duration formatter, the first turn and one with
+It checks first that the manifest still matches the scripts on disk and still
+names the events chronicle means to install, then covers every branch of the
+duration formatter, the first turn and one with
 populated deltas, a timed tool call, `duration_ms` becoming `exec`, a post with
 no matching pre, two concurrent calls, a failed call, a turn dying on an API
 error, the compaction boundary and its deferred marker, a hostile payload, and

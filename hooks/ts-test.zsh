@@ -49,6 +49,44 @@ TOOL='{"session_id":"test-sess","tool_use_id":"toolu_T1","tool_name":"Bash","too
 TOOLR='{"session_id":"test-sess","tool_use_id":"toolu_T1","tool_name":"Bash","tool_input":{"command":"cargo test"},"tool_response":{"stdout":"ok"}}'
 PROMPT='{"session_id":"test-sess","prompt":"hello"}'
 
+print -r -- "=== the manifest is the only list, so it has to match the files ==="
+# install.sh and uninstall.sh both derive their work from ts-manifest.zsh.
+# Nothing else enumerates the hooks, so the one way this can go wrong now is a
+# script arriving without a line in the manifest, or a line outliving its
+# script. ts-common, ts-manifest and this file are not entry points.
+source "$D/ts-manifest.zsh"
+typeset -a on_disk in_manifest
+on_disk=( ${(f)"$(cd "$D" && print -l -- ts-*.zsh(:r) | grep -vE '^ts-(common|manifest|test)$')"} )
+in_manifest=( ${(f)"$(ts_scripts)"} )
+typeset -a d_sorted m_sorted
+d_sorted=( ${(o)on_disk} ); m_sorted=( ${(o)in_manifest} )
+t_eq "every script has a manifest line" "${(j:,:)d_sorted}" "${(j:,:)m_sorted}"
+for s in $in_manifest; do
+  [[ -f "$D/$s.zsh" ]] && t_ok "$s exists" || t_bad "$s exists" "manifest names a missing script"
+done
+# The events themselves are pinned here rather than derived. Two events share
+# ts-tool-post, so dropping one of them leaves every script still present and
+# still named, and nothing above would notice. This is the expectation rather
+# than a second copy of the implementation: changing the set of events chronicle
+# installs should mean editing this line on purpose.
+typeset -a want_events w_sorted e_sorted
+want_events=(
+  PostCompact PostToolUse PostToolUseFailure PreCompact PreToolUse
+  SessionStart Stop StopFailure UserPromptSubmit
+)
+w_sorted=( ${(o)want_events} )
+e_sorted=( ${(o)${(f)"$(ts_events)"}} )
+t_eq "the event set is what we expect" "${(j:,:)e_sorted}" "${(j:,:)w_sorted}"
+
+# The regex both scripts use to recognise chronicle's own settings entries.
+re=$(ts_strip_re)
+for s in $in_manifest; do
+  [[ "/home/.claude/hooks/$s.zsh" =~ $re ]] && t_ok "strip matches $s" \
+    || t_bad "strip matches $s" "/(...)/$s.zsh not matched by $re"
+done
+t_absent "strip leaves other hooks alone" "/home/.claude/hooks/somebody-else.zsh" "$re"
+t_absent "strip is anchored at .zsh"      "/home/.claude/hooks/ts-turn.zsh.bak"  "$re"
+
 print -r -- "=== duration formatter, every branch ==="
 source "$D/ts-common.zsh"
 for pair in "30:30.0s" "59:59.0s" "60:1m00s" "520:8m40s" "3599:59m59s" "3600:1h00m" "7300:2h01m"; do
