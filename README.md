@@ -31,8 +31,24 @@ cache prefix on every turn.
 <time end="09:43:42" dur="2.8s"/>
 ```
 
+`PostToolUseFailure` stamps a call that failed, marking the outcome and showing
+in the scrollback whatever `TS_TOOL_MIN` says, on the grounds that a failure is
+always worth seeing:
+
+```
+<time end="09:43:42" outcome="failed" dur="4m12s"/>
+```
+
 `Stop` closes the turn in the scrollback alone, since by then the model has
 stopped and nothing more reaches it this turn.
+
+`StopFailure` fires when a turn ends on an API error, where `Stop` stays silent.
+It renders nothing itself, so it leaves a note that the next turn stamp reports
+and clears:
+
+```
+<time now="..." session_elapsed="..." previous_turn_failed="overloaded_error"/>
+```
 
 Every stamp is UTC, so a transcript reads the same wherever it was recorded and
 whatever the machine's clock was set to. The date lives on the turn stamp so the
@@ -130,9 +146,9 @@ Confirmed against a live install on 2026-08-26.
 - Both hook payloads carry `tool_use_id`, which is what the matching keys on.
 - Hooks fire across every project on the machine, with each session's state in
   its own directory.
-- A tool call that fails skips `PostToolUse`, so it carries no stamp and leaves
-  its start entry behind for the daily sweep to collect. Unique ids keep that
-  entry from ever matching a later call.
+- A tool call that fails goes to `PostToolUseFailure` rather than `PostToolUse`,
+  which is why both events run the same script. A failure carries its duration
+  and clears its start entry like any other call.
 - Subagent tool calls fire the hooks and carry stamps, under the parent's
   `session_id`, so parent and subagent share one state directory. Keying on
   `tool_use_id` keeps their entries distinct.

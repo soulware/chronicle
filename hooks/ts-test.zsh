@@ -46,6 +46,18 @@ print -r -- "$PROMPT" | "$D/ts-turn.zsh"
 echo "=== stop (end of turn) ==="
 print -r -- '{"session_id":"test-sess","hook_event_name":"Stop","last_assistant_message":"done"}' | "$D/ts-stop.zsh"
 
+echo "=== tool failure: stamped, and its start entry cleared ==="
+FAILP='{"session_id":"test-sess","tool_use_id":"toolu_FAIL","tool_name":"Bash","tool_input":{"command":"boom"}}'
+print -r -- "$FAILP" | "$D/ts-tool-pre.zsh"
+sleep 1
+print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_FAIL","hook_event_name":"PostToolUseFailure","tool_error":"exit 7"}' | "$D/ts-tool-post.zsh"
+echo "leftover after failure: $(ls "$TS_STATE_DIR/test-sess" | grep -c '^tool-' || true)"
+
+echo "=== turn dying on an API error is reported once on the next turn ==="
+print -r -- '{"session_id":"test-sess","hook_event_name":"StopFailure","error_type":"overloaded_error"}' | "$D/ts-stop-fail.zsh"
+print -r -- "$PROMPT" | "$D/ts-turn.zsh" | jq -r .systemMessage
+print -r -- "$PROMPT" | "$D/ts-turn.zsh" | jq -r .systemMessage
+
 echo "=== malformed stdin must not break the turn ==="
 print -r -- 'not json' | "$D/ts-tool-post.zsh"; echo "exit=$?"
 

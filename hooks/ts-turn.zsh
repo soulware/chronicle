@@ -36,6 +36,13 @@ if [[ -f "$dir/turn" ]]; then
   msg+="  ·  +$gap since last turn"
 fi
 
+if [[ -f "$dir/turnfail" ]]; then
+  IFS='|' read -r failed_at failed_kind < "$dir/turnfail"
+  rm -f "$dir/turnfail"
+  attrs+=" previous_turn_failed=\"$failed_kind\""
+  msg+="  ·  previous turn failed ($failed_kind)"
+fi
+
 print -r -- $now > "$dir/turn"
 
 ts_emit UserPromptSubmit "<time $attrs/>" "$msg"
