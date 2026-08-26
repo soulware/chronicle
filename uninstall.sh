@@ -15,6 +15,7 @@ jq '
   | .hooks.StopFailure      |= strip
   | .hooks.PreCompact       |= strip
   | .hooks.PostCompact      |= strip
+  | .hooks.SessionStart      |= strip
   | .hooks |= with_entries(select(.value | length > 0))
   | if (.hooks | length) == 0 then del(.hooks) else . end
 ' "$S" > "$S.new"
