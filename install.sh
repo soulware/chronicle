@@ -19,7 +19,9 @@ for s in ts-turn ts-tool-pre ts-tool-post ts-stop; do
   ln -sf "$SRC/$s.zsh" "$H/$s.zsh"
 done
 
-cp "$S" "$S.pre-chronicle"
+# Written once. A re-run would otherwise capture settings that already have the
+# hooks in them, leaving a backup that no longer matches its name.
+[[ -f "$S.pre-chronicle" ]] || cp "$S" "$S.pre-chronicle"
 
 # Chronicle's own entries are stripped first, so re-running replaces them
 # rather than stacking a second copy.
