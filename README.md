@@ -265,6 +265,44 @@ of execution against 3.7s of `dur`, the difference being a permission prompt.
 Both numbers are emitted, `dur` and `exec`, so the wait is readable as its own
 quantity.
 
+### Against Claude Code's own clock
+
+Claude Code records time too, so the two can be compared, and it is worth
+knowing where they agree before trusting either against the other.
+
+The clocks agree. Both write UTC, and across 63 stamps in one session the
+transcript envelope landed between 0.044s and 1.004s after the stamp it
+carried, median 0.476s, spread flat across that second. That is `strftime`
+truncating to whole seconds rather than any drift. A stamp is therefore always
+at or before the instant it names, never after, by less than a second.
+
+The stamps are UTC and the clock on the wall is usually not. `git log` renders
+local time, so a commit and the stamp for the same moment read an hour apart
+here without either being wrong. The `Z` is what settles it.
+
+`turn_duration` records in the transcript carry Claude Code's own `durationMs`
+for each turn, and it does not measure what `last_turn_dur` measures. Over one
+session:
+
+```
+turn ends        chronicle   claude code   difference
+12:13:59            13.5s        12.6s         0.8s
+12:15:40            80.9s        49.5s        31.4s
+12:21:06            53.4s        52.9s         0.5s
+12:30:15           198.3s       198.1s         0.2s
+12:36:25           311.7s       310.7s         1.0s
+```
+
+Four of the five agree inside a second. The turn that does not is the one
+holding an `AskUserQuestion`, whose own stamp reads `dur="31.0s"`, which is the
+gap. Claude Code discounts the time a turn spends blocked on the user;
+`last_turn_dur` is wall clock from prompt to stop and counts it. Neither is
+wrong, and the distinction is the one `dur` and `exec` already draw for a single
+call, resolved the other way one level up.
+
+Those records also make the case for the whole thing, since they sit on disk
+carrying exactly the duration the model cannot see.
+
 ## Later
 
 Transcript stamps answer "how long did that take" within one session. They cannot
