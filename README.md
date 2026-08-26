@@ -83,6 +83,36 @@ date and the model has a dated turn stamp nearby already.
 defaults to 0, so every call shows. Raising it to 5 limits the scrollback to
 slow calls and leaves the model's stamps untouched.
 
+## Compaction
+
+Compaction replaces the message history with a summary, and the summary keeps
+what the summarising model judged relevant to the task. A `<time>` tag is noise
+by that measure, so the stamps go. Measured on a session that had been compacted
+once, the only stamps in the summary were ones quoted inside code and test
+output, and those survived because the session's subject happened to be
+timestamps.
+
+The transcript file keeps every record either way. It is append-only, so the
+pre-compaction messages stay on disk alongside a `compact_boundary` marker, and
+each record carries an ISO timestamp with milliseconds in its envelope. The
+detail is durable and finer-grained than anything these hooks emit. What
+compaction takes away is reach, not the record.
+
+So the pair marks the boundary rather than trying to carry detail across it.
+`PreCompact` measures the stretch about to be folded up and writes it to state,
+since anything it returns is subject to that same compaction. `PostCompact`
+reports it on the far side:
+
+```
+<compaction at="2026-08-26T11:53:15Z" trigger="manual" covered_from="2026-08-26T10:17:26.904Z"
+            prompts="25" span="1h35m" transcript="/Users/…/<session>.jsonl"/>
+```
+
+`covered_from` anchors on the previous boundary where there is one, so a second
+compaction reports the stretch it folded rather than the whole session. The
+transcript path is included because the granular record lives there, and a
+boundary the model can see is what makes it worth going to look.
+
 ## Measured cost
 
 - 35ms per pre+post pair, so about 18s across a 500-call session.

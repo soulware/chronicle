@@ -14,6 +14,15 @@ ts_now_clock() {
   strftime '%H:%M:%S' $EPOCHSECONDS
 }
 
+# Transcript envelope timestamps look like 2026-08-26T10:17:26.904Z. Seconds are
+# enough here, so the fraction and the zone marker come off before parsing.
+ts_iso_to_epoch() {
+  local s=${1%%.*}
+  s=${s%Z}
+  local -x TZ=UTC
+  strftime -r '%Y-%m-%dT%H:%M:%S' "$s" 2>/dev/null
+}
+
 ts_fmt_dur() {
   local -F s=$1
   local -i i=$1

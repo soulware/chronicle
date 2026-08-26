@@ -58,6 +58,21 @@ print -r -- '{"session_id":"test-sess","hook_event_name":"StopFailure","error_ty
 print -r -- "$PROMPT" | "$D/ts-turn.zsh" | jq -r .systemMessage
 print -r -- "$PROMPT" | "$D/ts-turn.zsh" | jq -r .systemMessage
 
+echo "=== compaction boundary, measured from a synthetic transcript ==="
+TR="$TS_STATE_DIR/fake-transcript.jsonl"
+{
+  print -r -- '{"type":"user","timestamp":"2026-08-26T09:00:00.000Z","message":{"content":"one"}}'
+  print -r -- '{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-26T09:30:00.000Z"}'
+  print -r -- '{"type":"user","timestamp":"2026-08-26T09:40:00.000Z","message":{"content":"two"}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-26T09:50:00.000Z","message":{"content":"three"}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-26T09:55:00.000Z","message":{"content":[{"type":"tool_result"}]}}'
+} > "$TR"
+jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PreCompact",trigger_reason:"manual"}' | "$D/ts-precompact.zsh" > /dev/null
+echo "  state: $(cat "$TS_STATE_DIR/test-sess/compaction")"
+echo "  (expect the 09:30 boundary and 2 prompts, the tool result excluded)"
+jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/ts-postcompact.zsh" | jq -r .hookSpecificOutput.additionalContext
+echo "  cleared: $(ls "$TS_STATE_DIR/test-sess" | grep -c compaction || true)"
+
 echo "=== malformed stdin must not break the turn ==="
 print -r -- 'not json' | "$D/ts-tool-post.zsh"; echo "exit=$?"
 
