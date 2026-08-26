@@ -220,8 +220,12 @@ Confirmed against a live install on 2026-08-26.
 - The compaction payload names the trigger `trigger`.
 - `Stop` reaches the model through `additionalContext`, but the field means
   feedback to act on and keeps the turn open, so a duration cannot ride it.
-- `SessionStart` takes `additionalContext`, confirmed on a resume, so the
-  compaction marker reaches the model there rather than a turn later.
+- `SessionStart` takes `additionalContext`, so the compaction marker reaches
+  the model there rather than a turn later. Confirmed on `source="resume"` and
+  on `source="compact"`, which is the seam the marker is written for.
+- The span in the marker is longer than the span `PreCompact` reports, because
+  the marker runs from `covered_from` to the moment a later event claims it.
+  The difference is the time the compaction itself takes.
 - A resume keeps the `session_id`, so the state directory carries over and a
   resumed session goes on counting from its original start.
 - A compaction appends a second `compact_boundary` record and leaves every
