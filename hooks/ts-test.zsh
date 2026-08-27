@@ -371,6 +371,18 @@ long=$(print -r -- "$("${Q[@]}" recent '' --contains)" | awk '{ if (length($0) >
 (( long <= 120 )) && t_ok "every row stays bounded" \
   || t_bad "every row stays bounded" "longest row was $long chars"
 
+# A subagent's transcript is a normal transcript with isSidechain set on every
+# record. Filtering that flag out reads as an empty file, which is how this was
+# broken once already.
+ST="$TS_STATE_DIR/sidechain-transcript.jsonl"
+{
+  print -r -- '{"type":"assistant","isSidechain":true,"timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"echo probe"}}]}}'
+  print -r -- '{"type":"user","isSidechain":true,"timestamp":"2026-08-27T09:00:03.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s1","is_error":false}]}}'
+} > "$ST"
+out=$("$D/ts-query.zsh" --transcript "$ST" recent echo 2>&1)
+t_match "a subagent transcript reads normally" "$out" '^1 call matching'
+t_match "with its duration intact"             "$out" '3\.0s'
+
 out=$("$D/ts-query.zsh" --transcript /nope/missing.jsonl recent x 2>&1); rc=$?
 t_eq "an unreadable transcript exits 2"   "$rc" "2"
 

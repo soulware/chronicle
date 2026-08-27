@@ -21,12 +21,19 @@
 # --transcript PATH overrides the file. With no override the newest transcript
 # for the current directory's project is used.
 #
-# Records flagged isSidechain are excluded. The field is in the envelope schema
-# but has never been set in any transcript here, so how a subagent's tool calls
-# are recorded is untested: they may share this file or have one of their own.
-# Excluding them is right either way. If they share the file, a subagent's work
-# does not inflate the main session's counts. If they do not, the filter costs
-# nothing. Worth revisiting with a transcript that actually has some.
+# Subagents keep their own transcript, one file per agent, under
+# <project>/<session-id>/subagents/agent-<id>.jsonl, and every record in it is
+# flagged isSidechain. None of it reaches the parent session's file: a subagent
+# runs two commands and the parent transcript gains only the prompt and the
+# result. So there is nothing to filter out of a main transcript, and filtering
+# on the flag would blind this tool to the one file where the flag is set.
+# Point --transcript at a subagent file and it reads normally.
+#
+# Two consequences. A count of "how many times have I run this" excludes work
+# done by subagents, which is right, since that work happened in another
+# context. And chronicle's hooks do not fire inside a subagent at all, so a
+# subagent transcript carries no stamps and its durations can only come from
+# envelope timestamps, which is exactly what this reads.
 emulate -L zsh
 zmodload zsh/datetime
 setopt pipefail
@@ -84,14 +91,12 @@ JQ_CALLS='
   def cmd:
     .input.command // .input.file_path // .input.pattern // .input.path
     // .input.prompt // "";
-  (map(select(.isSidechain != true)
-       | select(.type == "assistant" and (.message.content | type) == "array")
+  (map(select(.type == "assistant" and (.message.content | type) == "array")
        | .timestamp as $ts
        | .message.content[]
        | select(.type == "tool_use")
        | {id: .id, start: $ts, tool: .name, cmd: (. | cmd)})) as $starts
-  | (map(select(.isSidechain != true)
-         | select((.message.content | type) == "array")
+  | (map(select((.message.content | type) == "array")
          | .timestamp as $ts
          | .message.content[]
          | select(.type == "tool_result")

@@ -246,6 +246,16 @@ Measured against chronicle's own stamps on the same calls, the two agree:
 nowhere in the transcript, which is why that hook still has a job. See
 [issue #1](https://github.com/soulware/chronicle/issues/1).
 
+Subagents keep their own transcript, one file per agent, at
+`<project>/<session-id>/subagents/agent-<id>.jsonl`, with `isSidechain` set on
+every record. None of it reaches the parent session's file, which gains only
+the prompt and the result. Point `--transcript` at one and it reads normally.
+
+Chronicle's hooks do not fire inside a subagent, so those transcripts carry no
+stamps at all. Their durations come from envelope timestamps, which is what
+this reads anyway, so a subagent's work is queryable even though it was never
+stamped.
+
 ## Install
 
 ```
