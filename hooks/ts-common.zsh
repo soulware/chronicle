@@ -36,15 +36,17 @@ ts_fmt_dur() {
   fi
 }
 
+# Either half may be empty, and an empty one is left out rather than sent as an
+# empty string: additionalContext:"" still opens a block in the transcript, and
+# a stamp that was gated out should leave no trace at all. With nothing to say
+# on either side the hook prints nothing, which is a valid thing for a hook to
+# do and cheaper than a well-formed announcement of silence.
 ts_emit() {
   local event=$1 ctx=$2 msg=$3
-  if [[ -n "$msg" ]]; then
-    jq -nc --arg e "$event" --arg c "$ctx" --arg m "$msg" \
-      '{hookSpecificOutput: {hookEventName: $e, additionalContext: $c}, systemMessage: $m}'
-  else
-    jq -nc --arg e "$event" --arg c "$ctx" \
-      '{hookSpecificOutput: {hookEventName: $e, additionalContext: $c}}'
-  fi
+  [[ -z "$ctx" && -z "$msg" ]] && return 0
+  jq -nc --arg e "$event" --arg c "$ctx" --arg m "$msg" \
+    '(if $c != "" then {hookSpecificOutput: {hookEventName: $e, additionalContext: $c}} else {} end)
+     + (if $m != "" then {systemMessage: $m} else {} end)'
 }
 
 # A compaction leaves a marker for the model, but PostCompact rejects

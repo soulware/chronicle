@@ -10,6 +10,11 @@
 emulate -L zsh
 D="${0:A:h}"
 export TS_STATE_DIR="$D/state-test"
+# Most of what follows asserts on the content of a stamp, which means the stamp
+# has to be emitted. TS_TOOL_CTX_MIN gates that, and a test call costs a
+# fraction of a second, so the gate is held open here and exercised on its own
+# further down with env -u, which is the only place the default is in play.
+export TS_TOOL_CTX_MIN=0
 rm -rf "$TS_STATE_DIR"
 chmod +x "$D"/ts-*.zsh
 
@@ -23,6 +28,9 @@ t_match()   { [[ "$2" =~ $3 ]]   && t_ok "$1" || t_bad "$1" "[$2] does not match
 t_absent()  { [[ "$2" =~ $3 ]]   && t_bad "$1" "[$2] unexpectedly matches /$3/" || t_ok "$1" }
 t_json()    { print -r -- "$2" | jq -e . > /dev/null 2>&1 && t_ok "$1" \
                 || t_bad "$1" "not valid json: [$2]" }
+# A gated stamp prints nothing at all, so for the hooks that can fall silent the
+# invariant is that whatever does come out parses, not that something comes out.
+t_quiet_or_json() { [[ -z "$2" ]] && t_ok "$1" || t_json "$1" "$2" }
 
 # Durations under a minute are printed as %.1fs, so the numeric part compares
 # directly. Sleeps overshoot, never undershoot, hence the one-sided tolerance.
@@ -113,6 +121,7 @@ t_eq     "post names its event"         "$(evt_of "$out")" "PostToolUse"
 t_match  "carries end"                  "$c" '<time end="[0-9]{4}-'
 t_near   "dur spans the pre hook"       "$(attr dur "$c")" 2.4 4.5
 t_absent "no exec without duration_ms"  "$c" ' exec='
+t_absent "and no wait to compute from it" "$c" ' wait='
 
 print -r -- "=== duration_ms becomes exec, and the gap between them is the wait ==="
 print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
@@ -122,12 +131,39 @@ c=$(ctx_of "$out")
 t_eq     "exec comes from duration_ms"  "$(attr exec "$c")" "0.1s"
 t_near   "dur still spans the wait"     "$(attr dur "$c")" 1.0 3.0
 
+print -r -- "=== the model's stamp is gated on cost, the scrollback's is not ==="
+# env -u drops the override set at the top of this file, so these four run
+# against the shipped default of 5 seconds. duration_ms is asserted rather than
+# slept, so a nine-second command costs the suite nothing to test.
+print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
+out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":100}' \
+      | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
+t_eq    "a cheap call says nothing to the model" "$(ctx_of "$out")" ""
+t_match "and still draws its scrollback line"    "$(msg_of "$out")" '·'
+
+print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
+out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":9000}' \
+      | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
+t_eq    "a slow command passes on exec"          "$(attr exec "$(ctx_of "$out")")" "9.0s"
+
+# The wait is tested against the threshold on its own, so a command that ran for
+# no time at all behind a slow guard is not filed as cheap. Threshold lowered
+# here so the suite waits one second rather than five for the same branch.
+print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
+sleep 1.2
+c=$(ctx_of "$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":50}' \
+      | TS_TOOL_CTX_MIN=1 "$D/ts-tool-post.zsh")")
+t_match "a slow wait passes on the wait alone"   "$c" '<time end="'
+t_near  "and the wait is precomputed, not left"  "$(attr wait "$c")" 1.0 3.0
+
 print -r -- "=== post with no matching pre, as when hooks arrive mid-session ==="
 out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_ORPHAN"}' | "$D/ts-tool-post.zsh")
 c=$(ctx_of "$out")
-t_json   "orphan still valid json"      "$out"
-t_match  "orphan still stamps end"      "$c" '<time end="'
-t_absent "orphan claims no duration"    "$c" ' dur='
+t_quiet_or_json "orphan emits nothing broken" "$out"
+# An end with no duration behind it is the shape the gate exists to suppress,
+# and it is what the SessionStart marker is there to explain: a call unstamped
+# because the hooks were not yet installed reads like one the gate let through.
+t_eq     "orphan sends the model nothing" "$c" ""
 t_eq     "orphan is silent in scrollback" "$(msg_of "$out")" ""
 
 print -r -- "=== two calls in flight at once keep separate clocks ==="
@@ -172,9 +208,17 @@ t_eq    "stop mark consumed"          "$(state '^stop$')" "0"
 print -r -- "=== a failed call is stamped as failed and always shown ==="
 print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_FAIL"}' | "$D/ts-tool-pre.zsh"
 sleep 1
-out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_FAIL","hook_event_name":"PostToolUseFailure","error_type":"exit_code"}' | "$D/ts-tool-post.zsh")
+# env -u again: a one-second failure is well under the default threshold, so
+# this only reaches the model if failure is exempt from the gate.
+out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_FAIL","hook_event_name":"PostToolUseFailure","error_type":"exit_code","duration_ms":80}' \
+      | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
 c=$(ctx_of "$out")
 t_eq     "failure names its own event"  "$(evt_of "$out")" "PostToolUseFailure"
+t_match  "failure outruns the gate"     "$c" '<time end="'
+# A rejection is a wait with nothing running behind it; a timeout is execution
+# that ran out. Both attributes are present so the two do not have to be told
+# apart by subtraction.
+t_eq     "exec separates the two kinds"  "$(attr exec "$c")" "0.1s"
 t_eq     "outcome is marked"            "$(attr outcome "$c")" "failed"
 t_match  "failure reaches the scrollback" "$(msg_of "$out")" 'failed'
 t_eq     "failure clears its start file" "$(state '^tool-')" "0"
@@ -246,14 +290,20 @@ t_eq    "marker cleared once delivered" "$(state compaction)" "0"
 print -r -- "=== the model must never be sent a stamp it cannot parse ==="
 # Every attribute is quoted, so a stray quote from a payload would split the
 # tag. The event name is the one field taken from stdin and echoed back.
-out=$(print -r -- '{"session_id":"te\"st","tool_use_id":"a\"b","hook_event_name":"Post\"Evil"}' | "$D/ts-tool-post.zsh")
+# The pre-hook runs first so the call is timed and the gate lets the stamp
+# through: an assertion about quoting is worth nothing against an empty stamp.
+H='{"session_id":"te\"st","tool_use_id":"a\"b","hook_event_name":"Post\"Evil"}'
+print -r -- "$H" | "$D/ts-tool-pre.zsh"
+out=$(print -r -- "$H" | "$D/ts-tool-post.zsh")
 t_json   "hostile payload stays json"   "$out"
+t_match  "and is stamped at all"        "$(ctx_of "$out")" '<time end="'
+t_eq     "the event name is echoed back" "$(evt_of "$out")" 'Post"Evil' 
 t_absent "no quote leaks into the tag"  "$(ctx_of "$out")" '=""[^ /]'
 
 print -r -- "=== malformed stdin must not break the turn ==="
 out=$(print -r -- 'not json' | "$D/ts-tool-post.zsh"); rc=$?
-t_eq   "exits clean"                    "$rc" "0"
-t_json "still emits valid json"         "$out"
+t_eq            "exits clean"           "$rc" "0"
+t_quiet_or_json "and says nothing it cannot say well" "$out"
 
 print -r -- "=== a missing transcript is not an error ==="
 out=$(jq -nc '{session_id:"test-sess",transcript_path:"/nope/missing.jsonl",hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh"); rc=$?

@@ -27,19 +27,36 @@ cache prefix on every turn.
       last_turn_dur="2m18s" since_last_stop="1m54s"/>
 ```
 
-`PostToolUse` stamps each tool result:
+`PostToolUse` stamps a tool result that cost something:
 
 ```
-<time end="2026-08-26T09:43:42Z" dur="2.8s" exec="0.4s"/>
+<time end="2026-08-26T09:43:42Z" dur="2.8s" exec="0.4s" wait="2.4s"/>
 ```
 
-`PostToolUseFailure` stamps a call that failed, marking the outcome and showing
-in the scrollback whatever `TS_TOOL_MIN` says, on the grounds that a failure is
-always worth seeing:
+Most calls get no stamp at all. `TS_TOOL_CTX_MIN` sets the seconds a call must
+reach to be worth telling the model about, and defaults to 5. A block that
+appears on every call and says nothing almost every time teaches the reader to
+skip the shape, and the rare informative one goes with it. Gated, the presence
+of a stamp is itself the signal: a `cat` that took 0.1s says nothing, and what
+survives is worth reading.
+
+The gate reads `exec` rather than `dur`, so a fast command behind a slow
+permission prompt is not filed as slow work, and it tests `wait` separately
+against the same threshold, so a deliberating guard or a long approval still
+surfaces on its own. Where the payload carries no `duration_ms` there is
+nothing to separate and the whole span is measured instead.
+
+`PostToolUseFailure` stamps a call that failed, marking the outcome and ignoring
+both gates, on the grounds that a failure is always worth seeing:
 
 ```
-<time end="2026-08-26T09:43:42Z" outcome="failed" dur="4m12s"/>
+<time end="2026-08-26T09:43:42Z" outcome="failed" dur="4m12s" exec="0.1s" wait="4m11s"/>
 ```
+
+The split matters most here, because a rejection and a timeout need opposite
+responses and look alike in `dur` alone. A rejection is wait with no execution
+behind it and should not be retried. A timeout is execution that ran out of
+time and should be.
 
 `Stop` closes the turn in the scrollback and records when the model stopped.
 It takes `additionalContext`, but the meaning there is feedback the model is
@@ -77,9 +94,11 @@ excerpt, across midnight, or on the far side of a compaction that took the
 anchoring turn stamp with it. Deltas are precomputed because subtracting ISO
 timestamps in-context is error-prone.
 
-`dur` is the whole time a call was outstanding and `exec` is the payload's own
-execution time, so the difference between them is queuing and approval wait.
-A large gap between the two is a presence signal rather than a slow command.
+`dur` is the whole time a call was outstanding, `exec` is the payload's own
+execution time, and `wait` is the difference: queuing and approval, outstanding
+but not running. A large `wait` is a presence signal rather than a slow command.
+It is precomputed for the same reason the turn deltas are, and appears once it
+reaches a second, below which there is nothing to say.
 
 Interleaving stamps between tool results is cache-safe. The cache breaks on
 rewriting earlier content, not on appending between it, and each stamp is
@@ -105,9 +124,12 @@ These carry the full date where the model's tool stamps carry a clock time, on
 the grounds that a person scanning back through a week of scrollback wants the
 date and the model has a dated turn stamp nearby already.
 
-`TS_TOOL_MIN` sets the seconds a call must reach before it appears here. It
-defaults to 0, so every call shows. Raising it to 5 limits the scrollback to
-slow calls and leaves the model's stamps untouched.
+`TS_TOOL_MIN` sets the seconds a call must reach before it appears here, and is
+a separate gate from `TS_TOOL_CTX_MIN` above because the two readers pay
+differently. A line here costs a person a glance, so it defaults to 0 and every
+call shows. Raising it to 5 limits the scrollback to slow calls and leaves the
+model's stamps untouched; lowering `TS_TOOL_CTX_MIN` to 0 restores a stamp on
+every call for the model and leaves the scrollback untouched.
 
 ## Compaction
 
@@ -147,7 +169,10 @@ boundary the model can see is what makes it worth going to look.
 ## Measured cost
 
 - 35ms per pre+post pair, so about 18s across a 500-call session.
-- ~16 tokens per tool stamp, ~35 per turn stamp, about 8k over 500 calls.
+- ~16 tokens per tool stamp, ~35 per turn stamp. 8k was the figure when all 500
+  calls carried one; under the default gate only the calls that cost something
+  do, so the total tracks how much of a session was spent waiting rather than
+  how many calls it made.
 
 ## Correlation
 
@@ -156,8 +181,10 @@ reads it back and deletes it. Both events carry that id, so each call is matched
 exactly and concurrent calls with identical input stay distinct. `PreToolUse`
 emits nothing and therefore costs no context.
 
-A `PostToolUse` with no matching start degrades to end-time-only, so installing
-mid-session is safe. Malformed stdin exits 0 and still emits.
+A `PostToolUse` with no matching start has no duration to gate on and stamps
+nothing, so installing mid-session is safe and leaves the calls already in
+flight looking like the cheap ones. Malformed stdin exits 0 the same way. A hook
+with nothing to say prints nothing rather than an empty stamp.
 
 State lives in `~/.claude/hooks/state/<session_id>/`, overridable with
 `TS_STATE_DIR`. Tool entries older than a day are swept on each turn.
@@ -214,7 +241,8 @@ It checks first that the manifest still matches the scripts on disk and still
 names the events chronicle means to install, then covers every branch of the
 duration formatter, the first turn and one with
 populated deltas, a timed tool call, `duration_ms` becoming `exec`, a post with
-no matching pre, two concurrent calls, a failed call, a turn dying on an API
+no matching pre, both gates and the failure's exemption from them, two
+concurrent calls, a failed call, a turn dying on an API
 error, the compaction boundary and its deferred marker, a hostile payload, and
 malformed stdin.
 
