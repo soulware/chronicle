@@ -420,6 +420,8 @@ IT="$TS_STATE_DIR/intent-transcript.jsonl"
   print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:01:00.000Z","message":{"content":[{"type":"tool_use","id":"i2","name":"Bash","input":{"command":"python3 patch.py && cargo test","description":"Fix the gate and re-run tests"}}]}}'
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:01:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i2","is_error":false}]}}'
   print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"i3","name":"Write","input":{"file_path":"/repo/a.txt","content":"x"}}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:03:00.000Z","message":{"content":[{"type":"tool_use","id":"i4","name":"Bash","input":{"command":"ls","description":"A caption long enough that it has to be clipped before it fits the column"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:03:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i4","is_error":false}]}}'
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:02:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i3","is_error":false}]}}'
 } > "$IT"
 IQ=( "$D/ts-query.zsh" --transcript "$IT" )
@@ -431,13 +433,18 @@ t_match "last names the caption"             "$out" 'Run the test suite'
 t_absent "and the command keeps no stray tab" "$out" $'\t'
 
 out=$("${IQ[@]}" intents)
-t_match "the log lists described calls"      "$out" '^2 described calls'
+t_match "the log lists described calls"      "$out" '^3 described calls'
 # Write carries no description, so it has no place in an account of purpose.
 t_absent "and skips calls without one"       "$out" 'a\.txt'
 # The scaffolding is not the point of the call, and showing it on every row
 # hides where stated purpose and actual work part company.
 t_match "a leading cd is stripped"           "$out" 'cargo test'
 t_absent "so no row leads with cd"           "$out" 'cd /repo'
+t_absent "nor with a dangling connector"     "$out" '^ *[0-9:Z]+ +Bash +[^ ].*  &&'
+
+# A clipped caption must not read as a short one.
+t_match "a cut caption is marked"            "$("${IQ[@]}" intents)" '…'
+t_absent "a short one is left alone"         "$("${IQ[@]}" intents suite)" 'Run the test suite…'
 
 out=$("${IQ[@]}" intents test)
 t_match "one word matches both captions"     "$out" '^2 described calls'

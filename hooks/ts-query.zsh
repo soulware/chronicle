@@ -77,6 +77,12 @@ to_secs() {
   esac
 }
 
+# Marks the cut so a clipped value cannot be mistaken for a short one.
+clip() {
+  local s=$1 n=$2
+  (( ${#s} > n )) && print -r -- "${s[1,n-1]}…" || print -r -- "$s"
+}
+
 fmt_dur() {
   local -F s=$1
   local -i i=$1
@@ -231,8 +237,12 @@ filter() {
 # affected the answer, which is noise dressed as disclosure.
 meta_note() {
   local prefix=$1
-  local n=$(print -r -- "$rows" | while IFS=$'\t' read -r a b c d tool command desc; do
-              is_meta "$command" && matches "$prefix" "$command" "$tool" && print x
+  local n=$(print -r -- "$rows" | while IFS=$'\t' read -r start b c d tool command desc; do
+              is_meta "$command" && matches "$prefix" "$command" "$tool" || continue
+              if (( cutoff )); then
+                local e=$(iso_ep "$start"); [[ -n "$e" ]] && (( e >= cutoff )) || continue
+              fi
+              print x
             done | wc -l | tr -d " ")
   (( n && ! ${include_meta:-0} )) &&
     print -r -- "($n call$( (( n == 1 )) || print s ) of ts-query itself excluded; --include-meta to keep)"
@@ -265,8 +275,8 @@ intents)
     # showing it on every row hides the one thing the command column is for:
     # letting the reader see where the stated purpose and the actual work part
     # company.
-    shown=${command##cd [^ ]## }
-    hits+=( "$(printf '  %s  %-6s %-46s %s' "${start:11:8}Z" "$tool" "${desc:0:46}" "${shown:0:44}")" )
+    shown=${command##cd [^ ]## (\&\& |; |)}
+    hits+=( "$(printf '  %s  %-6s %-46s %s' "${start:11:8}Z" "$tool" "$(clip "$desc" 46)" "$(clip "$shown" 44)")" )
   done < <(filter "")
   if (( ! $#hits )); then
     print -r -- "no described calls matching \"${*:2}\""
@@ -330,7 +340,7 @@ recent)
   print -r -- "$n call$( (( n == 1 )) || print s ) matching \"$prefix\"$window"
   meta_note "$prefix"
   print -r -- "$matched" | tail -10 | while IFS=$'\t' read -r start end secs outcome tool command desc; do
-    printf '  %s  %8s  %-6s  %s\n' "${start:11:8}Z" "$(fmt_dur $secs)" "$outcome" "${command:0:70}"
+    printf '  %s  %8s  %-6s  %s\n' "${start:11:8}Z" "$(fmt_dur $secs)" "$outcome" "$(clip "$command" 70)"
   done
   ;;
 
@@ -352,7 +362,7 @@ transitions)
   while IFS=$'\t' read -r start end secs outcome tool command desc; do
     [[ -n "$start" ]] || continue
     [[ -n "$prev" && "$prev" != "$outcome" ]] &&
-      hits+=( "$(printf '  %s  %-14s  %s' "${start:0:19}Z" "$prev -> $outcome" "${command:0:60}")" )
+      hits+=( "$(printf '  %s  %-14s  %s' "${start:0:19}Z" "$prev -> $outcome" "$(clip "$command" 60)")" )
     prev=$outcome
   done < <(filter "$prefix")
   if (( ! $#hits )); then
