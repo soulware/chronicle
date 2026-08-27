@@ -433,6 +433,44 @@ out=$("$D/ts-query.zsh" --transcript "$MT" recent cat --contains)
 t_match "reading the script is not a query" "$out" '^1 call matching'
 t_absent "so nothing is excluded for it"    "$out" 'excluded'
 
+print -r -- "=== intent is a caption, not a key ==="
+# Bash and Agent calls carry a model-authored description. It is a self-report
+# where the command is a measurement, and it captions the headline purpose of a
+# call rather than everything the call did, so it groups nothing: in one real
+# session fifteen calls ran the test suite and no two shared a description.
+IT="$TS_STATE_DIR/intent-transcript.jsonl"
+{
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"cd /repo && cargo test","description":"Run the test suite"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i1","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:01:00.000Z","message":{"content":[{"type":"tool_use","id":"i2","name":"Bash","input":{"command":"python3 patch.py && cargo test","description":"Fix the gate and re-run tests"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:01:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i2","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"i3","name":"Write","input":{"file_path":"/repo/a.txt","content":"x"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:02:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i3","is_error":false}]}}'
+} > "$IT"
+IQ=( "$D/ts-query.zsh" --transcript "$IT" )
+
+out=$("${IQ[@]}" intents)
+t_match "the log lists described calls"      "$out" '^2 described calls'
+# Write carries no description, so it has no place in an account of purpose.
+t_absent "and skips calls without one"       "$out" 'a\.txt'
+# The scaffolding is not the point of the call, and showing it on every row
+# hides where stated purpose and actual work part company.
+t_match "a leading cd is stripped"           "$out" 'cargo test'
+t_absent "so no row leads with cd"           "$out" 'cd /repo'
+
+out=$("${IQ[@]}" intents test)
+t_match "one word matches both captions"     "$out" '^2 described calls'
+out=$("${IQ[@]}" intents gate test)
+t_match "two words are an AND"               "$out" '^1 described call'
+out=$("${IQ[@]}" intents SUITE)
+t_match "matching ignores case"              "$out" '^1 described call'
+out=$("${IQ[@]}" intents nonesuch 2>&1); rc=$?
+t_eq    "an unmatched word exits non-zero"   "$rc" "1"
+
+# The caption names the headline, so the second call reads as a fix rather than
+# as a test run. This is the limitation, asserted so it stays known.
+t_absent "a caption hides secondary actions" "$("${IQ[@]}" intents 'Run the test suite')" 'patch\.py'
+
 out=$("$D/ts-query.zsh" --transcript /nope/missing.jsonl recent x 2>&1); rc=$?
 t_eq "an unreadable transcript exits 2"   "$rc" "2"
 

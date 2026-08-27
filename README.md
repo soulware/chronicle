@@ -216,6 +216,7 @@ so whether these hooks run or not.
 registry:
 
 ```
+ts-query intents [words] [--within 1h]    what the work was said to be about
 ts-query touched <path>                   every read and write of a file
 ts-query recent <prefix> [--within 30m]   how often, and when
 ts-query last <prefix>                    outcome and age of the last run
@@ -238,6 +239,31 @@ which is why every other query here has to guess.
 The counts come from `structuredPatch` in the tool result, which holds the real
 diff. `userModified` records the human quietly fixing what the model wrote, and
 nothing else in the record exposes that.
+
+`intents` reads the `description` that `Bash` and `Agent` calls carry, which is
+written by the model at the time of the call:
+
+```
+8 described calls in the last 40m
+  14:10:44Z  Bash   Census the envelope fields                 jq -r 'paths(scalars)…
+  14:20:27Z  Bash   Check whether intent is already recorded   jq -r '.message.conte…
+```
+
+It is worth being clear about what this is not. It is not a normalisation key.
+A description captions the headline purpose of a call rather than everything
+the call did, so it groups nothing: measured on one session, fifteen calls ran
+the test suite and no two shared a description, because a call that patches a
+file and then runs tests is captioned as the patch. Anything relying on
+descriptions to collapse command variants will miss almost all of them.
+
+What it is instead is an account of what the work was about, which is the
+question that has no other answer in the record, and the one worth asking after
+a compaction.
+
+The command is shown beside the caption because the two have different
+standing. A description is a self-report; the command is a measurement. Where
+they disagree that is a fact about the session worth seeing rather than an
+error to correct.
 
 A file changed by a shell command has no structured record at all, so `touched`
 distinguishes the two silences: nothing found, versus nothing found *and* four

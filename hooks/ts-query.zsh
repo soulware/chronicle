@@ -13,6 +13,7 @@
 # error into a visible one: too short over-matches and costs a rerun, too long
 # returns nothing at all and says so.
 #
+#   ts-query intents [words] [--within 1h]    what the work was said to be about
 #   ts-query touched <path>                   every read and write of a file
 #   ts-query recent <prefix> [--within 30m]   how often, and when
 #   ts-query last <prefix>                    outcome and age of the last run
@@ -46,7 +47,7 @@
 # envelope timestamps, which is exactly what this reads.
 emulate -L zsh
 zmodload zsh/datetime
-setopt pipefail
+setopt pipefail extendedglob
 
 die() { print -r -- "ts-query: $1" >&2; exit 2 }
 
@@ -101,11 +102,12 @@ JQ_CALLS='
   def cmd:
     .input.command // .input.file_path // .input.pattern // .input.path
     // .input.prompt // "";
+  def desc: .input.description // .input.summary // "";
   (map(select(.type == "assistant" and (.message.content | type) == "array")
        | .timestamp as $ts
        | .message.content[]
        | select(.type == "tool_use")
-       | {id: .id, start: $ts, tool: .name, cmd: (. | cmd)})) as $starts
+       | {id: .id, start: $ts, tool: .name, cmd: (. | cmd), desc: (. | desc)})) as $starts
   | (map(select((.message.content | type) == "array")
          | .timestamp as $ts
          | .message.content[]
@@ -119,7 +121,8 @@ JQ_CALLS='
           ((.end | ep) - (.start | ep)),
           (if .err then "failed" else "ok" end),
           .tool,
-          (.cmd | gsub("[\t\n]"; " "))
+          (.cmd | gsub("[\t\n]"; " ")),
+          (.desc | gsub("[\t\n]"; " "))
         ] | @tsv)[]
 '
 
@@ -210,7 +213,7 @@ matches() {
 
 filter() {
   local prefix=$1
-  print -r -- "$rows" | while IFS=$'\t' read -r start end secs outcome tool command; do
+  print -r -- "$rows" | while IFS=$'\t' read -r start end secs outcome tool command desc; do
     [[ -n "$start" ]] || continue
     matches "$prefix" "$command" "$tool" || continue
     if (( ! ${include_meta:-0} )) && is_meta "$command"; then
@@ -219,7 +222,7 @@ filter() {
     if (( cutoff )); then
       local e=$(iso_ep "$start"); [[ -n "$e" ]] && (( e >= cutoff )) || continue
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$start" "$end" "$secs" "$outcome" "$tool" "$command"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$start" "$end" "$secs" "$outcome" "$tool" "$command" "$desc"
   done
 }
 
@@ -228,7 +231,7 @@ filter() {
 # affected the answer, which is noise dressed as disclosure.
 meta_note() {
   local prefix=$1
-  local n=$(print -r -- "$rows" | while IFS=$'\t' read -r a b c d tool command; do
+  local n=$(print -r -- "$rows" | while IFS=$'\t' read -r a b c d tool command desc; do
               is_meta "$command" && matches "$prefix" "$command" "$tool" && print x
             done | wc -l | tr -d " ")
   (( n && ! ${include_meta:-0} )) &&
@@ -237,6 +240,42 @@ meta_note() {
 }
 
 case "$cmd" in
+
+intents)
+  # Descriptions are a per-call caption of the headline purpose, written by the
+  # model at the time. They are not a normalisation key: fifteen calls in one
+  # session ran the test suite and no two share a description, because a call
+  # that patches a file and runs tests is captioned as the patch. So this reads
+  # as an account of what the work was about, not as an index of what was done.
+  #
+  # It is also a self-report, where the command is a measurement. Both are
+  # shown, and where they disagree that is a fact about the session worth
+  # seeing rather than an error to correct.
+  typeset -a hits
+  while IFS=$'\t' read -r start end secs outcome tool command desc; do
+    [[ -n "$start" && -n "$desc" ]] || continue
+    if (( $# > 1 )); then
+      ok=1
+      for w in "${@:2}"; do
+        [[ "${desc:l}" == *"${w:l}"* ]] || { ok=0; break }
+      done
+      (( ok )) || continue
+    fi
+    # A leading `cd` is scaffolding rather than the point of the call, and
+    # showing it on every row hides the one thing the command column is for:
+    # letting the reader see where the stated purpose and the actual work part
+    # company.
+    shown=${command##cd [^ ]## }
+    hits+=( "$(printf '  %s  %-6s %-46s %s' "${start:11:8}Z" "$tool" "${desc:0:46}" "${shown:0:44}")" )
+  done < <(filter "")
+  if (( ! $#hits )); then
+    print -r -- "no described calls matching \"${*:2}\""
+    exit 1
+  fi
+  print -r -- "$#hits described call$( (( $#hits == 1 )) || print s )${within:+ in the last $within}"
+  meta_note ""
+  print -l -- "${hits[@]: -20}"
+  ;;
 
 touched)
   # Neither `path` nor `fpath` may be used as a variable name here: zsh ties
@@ -290,7 +329,7 @@ recent)
   fi
   print -r -- "$n call$( (( n == 1 )) || print s ) matching \"$prefix\"$window"
   meta_note "$prefix"
-  print -r -- "$matched" | tail -10 | while IFS=$'\t' read -r start end secs outcome tool command; do
+  print -r -- "$matched" | tail -10 | while IFS=$'\t' read -r start end secs outcome tool command desc; do
     printf '  %s  %8s  %-6s  %s\n' "${start:11:8}Z" "$(fmt_dur $secs)" "$outcome" "${command:0:70}"
   done
   ;;
@@ -309,7 +348,7 @@ transitions)
   prefix=${2:-}
   prev=""
   typeset -a hits
-  while IFS=$'\t' read -r start end secs outcome tool command; do
+  while IFS=$'\t' read -r start end secs outcome tool command desc; do
     [[ -n "$start" ]] || continue
     [[ -n "$prev" && "$prev" != "$outcome" ]] &&
       hits+=( "$(printf '  %s  %-14s  %s' "${start:0:19}Z" "$prev -> $outcome" "${command:0:60}")" )
