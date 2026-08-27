@@ -281,7 +281,10 @@ restore.
 Then open `/hooks` once, or restart, so the config watcher reloads.
 
 Re-running `install.sh` replaces chronicle's own entries rather than stacking a
-second copy, and leaves every other hook alone.
+second copy, and leaves every other hook alone. It clears entries for events
+chronicle no longer installs, and symlinks left dangling by scripts it no
+longer builds — both of which Claude Code otherwise reports as a hook error on
+every fire.
 
 `hooks/ts-manifest.zsh` pairs each event with the script that serves it, and is
 the only place that list is written down. `install.sh` and `uninstall.sh` derive

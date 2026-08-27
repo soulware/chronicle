@@ -36,6 +36,10 @@ for s in ${(f)"$(ts_scripts)"}; do
   ln -sf "$SRC/$s.zsh" "$H/$s.zsh"
 done
 
+# No hook keeps state any more. A directory left by an older install is stale
+# data that nothing reads and nothing sweeps.
+rm -rf "$H/state"
+
 # A machine that has never written settings starts from an empty object. There
 # is nothing to restore in that case, so no backup is taken either.
 #
@@ -50,15 +54,23 @@ else
   print -r -- '{}' > "$S.pre-chronicle"
 fi
 
-# One assignment per event, built from the manifest. Chronicle's own entries are
-# stripped first, so re-running replaces them rather than stacking a second copy.
+# Chronicle's own entries are stripped from every event before anything is
+# written, rather than only from the events about to be assigned. An event
+# dropped from the manifest is never visited by the loop below, so stripping
+# there would leave its entry in place pointing at a script that no longer
+# exists — which Claude Code then reports as a hook error on every fire.
+#
+# An event chronicle never touched is untouched here: strip only removes
+# commands that match the naming convention, and the pass at the end drops
+# keys that strip emptied.
 prog='def strip: (. // []) | map(select((.hooks // []) | any(.command // "" | test($re)) | not));
 def entry($n): {"hooks":[{"type":"command","command":($h+"/"+$n+".zsh")}]};
-.hooks = (.hooks // {})'
+.hooks = ((.hooks // {}) | with_entries(.value |= strip))'
 for pair in $TS_HOOKS; do
   event=${pair%%:*} script=${pair#*:}
-  prog+=$'\n'"| .hooks.$event = ((.hooks.$event // []) | strip) + [entry(\"$script\")]"
+  prog+=$'\n'"| .hooks.$event = ((.hooks.$event // []) + [entry(\"$script\")])"
 done
+prog+=$'\n''| .hooks |= with_entries(select(.value | length > 0))'
 
 jq --arg h "$H" --arg re "$(ts_strip_re)" "$prog" "$S" > "$S.new"
 

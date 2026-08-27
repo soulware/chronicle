@@ -96,6 +96,39 @@ done
 t_absent "strip leaves other hooks alone" "/home/.claude/hooks/somebody-else.zsh" "$re"
 t_absent "strip is anchored at .zsh"      "/home/.claude/hooks/ts-turn.zsh.bak"  "$re"
 
+print -r -- "=== install and uninstall clean up after events we retired ==="
+# Both scripts used to visit only the events currently in the manifest, so an
+# entry for an event chronicle no longer installs survived every reinstall,
+# pointing at a script that had been deleted. Claude Code reports that as a hook
+# error on every fire. Run against a throwaway HOME so the real one is untouched.
+FH="$TS_STATE_DIR/fakehome"
+rm -rf "$FH"; mkdir -p "$FH/.claude"
+cat > "$FH/.claude/settings.json" <<'SETTINGS'
+{
+  "hooks": {
+    "PostToolUse": [{"hooks":[{"type":"command","command":"/old/.claude/hooks/ts-tool-post.zsh"}]}],
+    "StopFailure": [{"hooks":[{"type":"command","command":"/old/.claude/hooks/ts-stop-fail.zsh"}]}],
+    "PreToolUse": [{"hooks":[{"type":"command","command":"/somebody/else/guard.sh"}]}]
+  },
+  "theme": "dark"
+}
+SETTINGS
+( HOME="$FH" "${D:h}/install.sh" ) > /dev/null 2>&1
+inst="$FH/.claude/settings.json"
+ours() { jq -r --arg e "$1" '.hooks[$e][]?.hooks[]?.command // empty' "$inst" 2>/dev/null }
+t_eq     "a retired event is cleared"      "$(ours PostToolUse)" ""
+t_eq     "and so is its state-only hook"   "$(ours StopFailure)" ""
+t_match  "the current hooks are installed" "$(ours UserPromptSubmit)" 'ts-turn\.zsh$'
+# The whole point of matching on a convention rather than a list is that it
+# must still be narrow enough to leave other people's hooks alone.
+t_eq     "another tool's hook is untouched" "$(ours PreToolUse)" "/somebody/else/guard.sh"
+t_eq     "and unrelated settings survive"   "$(jq -r .theme "$inst")" "dark"
+t_eq     "no state directory is installed"  "$(ls "$FH/.claude/hooks" 2>/dev/null | grep -c '^state$')" "0"
+
+( HOME="$FH" "${D:h}/uninstall.sh" ) > /dev/null 2>&1
+t_eq     "uninstall removes ours"          "$(ours UserPromptSubmit)" ""
+t_eq     "and still leaves theirs"         "$(ours PreToolUse)" "/somebody/else/guard.sh"
+
 print -r -- "=== duration formatter, every branch ==="
 source "$D/ts-common.zsh"
 for pair in "30:30.0s" "59:59.0s" "60:1m00s" "520:8m40s" "3599:59m59s" "3600:1h00m" "7300:2h01m"; do
