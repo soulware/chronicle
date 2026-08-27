@@ -166,7 +166,7 @@ done
 set -- "${rest[@]}"
 
 cmd=${1:-}
-[[ -n "$cmd" ]] || die "usage: ts-query recent|last|transitions|elapsed [prefix] [--within 30m]"
+[[ -n "$cmd" ]] || die "usage: ts-query touched|intents|recent|last|transitions|elapsed [arg] [--within 30m] [--contains] [--include-meta] [--transcript PATH]"
 
 if [[ -z "$transcript" ]]; then
   transcript=$(default_transcript) \
