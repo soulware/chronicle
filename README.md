@@ -65,6 +65,15 @@ responses and look alike in `dur` alone. A rejection is wait with no execution
 behind it and should not be retried. A timeout is execution that ran out of
 time and should be.
 
+The exemption covers less than it sounds like. `PostToolUseFailure` fires on
+the tool call failing, and the Bash tool runs without `pipefail`, so
+`cargo test | tail -50` exits 0 on a failing suite and is stamped, if at all,
+as an ordinary call. Piping to bound the output is common precisely on the
+commands whose failure matters most. So an absent `outcome="failed"` is not
+evidence that anything succeeded, and the stamps say nothing about the result
+of a call, only about what it cost. What did or did not pass is in the tool
+result, which the model is already reading.
+
 `Stop` closes the turn in the scrollback and records when the model stopped.
 It takes `additionalContext`, but the meaning there is feedback the model is
 expected to act on, which holds the turn open, so the time goes to state and
