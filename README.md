@@ -41,10 +41,17 @@ of a stamp is itself the signal: a `cat` that took 0.1s says nothing, and what
 survives is worth reading.
 
 The gate reads `exec` rather than `dur`, so a fast command behind a slow
-permission prompt is not filed as slow work, and it tests `wait` separately
-against the same threshold, so a deliberating guard or a long approval still
-surfaces on its own. Where the payload carries no `duration_ms` there is
-nothing to separate and the whole span is measured instead.
+permission prompt is not filed as slow work. Where the payload carries no
+`duration_ms` there is nothing to separate and the whole span is measured
+instead.
+
+`wait` has its own gate, `TS_TOOL_WAIT_MIN`, defaulting to 60. The two bands do
+not line up: five seconds of execution is a slow command, five seconds of wait
+is a permission prompt answered by someone sitting there. The only wait worth
+reporting is one long enough to mean nobody is at the keyboard. `wait` is still
+*reported* from a second, which is what separates a rejection from a timeout on
+a failure — the gate decides whether to speak, the second threshold decides
+what to say.
 
 `PostToolUseFailure` stamps a call that failed, marking the outcome and ignoring
 both gates, on the grounds that a failure is always worth seeing:

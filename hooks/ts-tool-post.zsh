@@ -20,10 +20,17 @@
 # signal.
 #
 # The model's gate reads exec rather than dur, so a 0.1s command behind a slow
-# permission prompt is not filed as slow work. The wait is tested separately
-# against the same threshold, so a deliberating guard or a long approval still
-# surfaces on its own. Where the payload gives no duration_ms there is nothing
-# to separate and the whole span is measured instead.
+# permission prompt is not filed as slow work. Where the payload gives no
+# duration_ms there is nothing to separate and the whole span is measured
+# instead.
+#
+# The wait is gated separately, on TS_TOOL_WAIT_MIN, because the two bands do
+# not line up. Five seconds of execution is a slow command. Five seconds of
+# wait is a permission prompt answered by someone sitting there, which is
+# nothing to act on. The only wait worth reporting is one long enough to mean
+# nobody is at the keyboard, so it defaults to a minute. A guard deliberating
+# for two seconds is visible in dur and exec if anyone goes looking, and is not
+# worth a stamp of its own.
 #
 # A failure ignores both gates, on the grounds that a failure is always worth
 # seeing, and carries exec and wait so a rejection reads differently from a
@@ -64,13 +71,14 @@ if [[ -f "$f" ]]; then
       attrs+=" exec=\"$(ts_fmt_dur $own)\""
       wait=$((secs - own))
       (( wait < 0 )) && wait=0
-      # Precomputed for the same reason the turn deltas are: a subtraction the
-      # model has to do for itself is one it can get wrong. A second of wait is
-      # queuing, a minute of it is nobody at the keyboard.
+      # Reported from a second, which is lower than the gate above on purpose:
+      # once a stamp is being written the attribute is nearly free, and on a
+      # failure it is what separates a rejection from a timeout. The gate
+      # decides whether to speak, this decides what to say.
       (( wait >= 1 )) && attrs+=" wait=\"$(ts_fmt_dur $wait)\""
     fi
     (( secs >= ${TS_TOOL_MIN:-0} )) && show=1
-    (( own >= ${TS_TOOL_CTX_MIN:-5} || wait >= ${TS_TOOL_CTX_MIN:-5} )) && ctx_show=1
+    (( own >= ${TS_TOOL_CTX_MIN:-5} || wait >= ${TS_TOOL_WAIT_MIN:-60} )) && ctx_show=1
     if (( show )); then
       msg="$(ts_now_iso)  ·  $dur"
       (( failed )) && msg+="  ·  failed"

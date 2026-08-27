@@ -146,15 +146,24 @@ out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_
       | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
 t_eq    "a slow command passes on exec"          "$(attr exec "$(ctx_of "$out")")" "9.0s"
 
-# The wait is tested against the threshold on its own, so a command that ran for
-# no time at all behind a slow guard is not filed as cheap. Threshold lowered
-# here so the suite waits one second rather than five for the same branch.
+# The wait has its own threshold, a minute by default, because a five second
+# wait is someone answering a prompt and not worth reporting. Lowered here so
+# the suite waits one second rather than sixty for the same branch, and
+# TS_TOOL_CTX_MIN is left unset to prove the wait passes on its own.
 print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
 sleep 1.2
 c=$(ctx_of "$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":50}' \
-      | TS_TOOL_CTX_MIN=1 "$D/ts-tool-post.zsh")")
+      | env -u TS_TOOL_CTX_MIN TS_TOOL_WAIT_MIN=1 "$D/ts-tool-post.zsh")")
 t_match "a slow wait passes on the wait alone"   "$c" '<time end="'
 t_near  "and the wait is precomputed, not left"  "$(attr wait "$c")" 1.0 3.0
+# Same call, default thresholds: 1.2s of wait is not a minute, so it says
+# nothing. The wait gate has to be slack enough that answering a prompt at a
+# normal speed is not an event.
+print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
+sleep 1.2
+t_eq    "a short wait is not an event"           "$(ctx_of "$(print -r -- \
+        '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":50}' \
+        | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")")" ""
 
 print -r -- "=== post with no matching pre, as when hooks arrive mid-session ==="
 out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_ORPHAN"}' | "$D/ts-tool-post.zsh")
