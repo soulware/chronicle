@@ -338,10 +338,11 @@ last)
   prefix=${2:-}
   row=$(filter "$prefix" | tail -1)
   [[ -n "$row" ]] || { print -r -- "no call matching \"$prefix\""; exit 1 }
-  IFS=$'\t' read -r start end secs outcome tool command <<< "$row"
+  IFS=$'\t' read -r start end secs outcome tool command desc <<< "$row"
   ago=$(( EPOCHSECONDS - $(iso_ep "$start") ))
   print -r -- "$outcome, $(fmt_dur $secs), $(fmt_dur $ago) ago at $start"
-  print -r -- "  $command"
+  [[ -n "$desc" ]] && print -r -- "  $desc"
+  print -r -- "  ${command//$'\t'/ }"
   ;;
 
 transitions)

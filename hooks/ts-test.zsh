@@ -424,6 +424,12 @@ IT="$TS_STATE_DIR/intent-transcript.jsonl"
 } > "$IT"
 IQ=( "$D/ts-query.zsh" --transcript "$IT" )
 
+# `last` reads a row into named fields; one too few and the command silently
+# absorbs the caption, which still looks like a plausible command.
+out=$("${IQ[@]}" last "cd /repo")
+t_match "last names the caption"             "$out" 'Run the test suite'
+t_absent "and the command keeps no stray tab" "$out" $'\t'
+
 out=$("${IQ[@]}" intents)
 t_match "the log lists described calls"      "$out" '^2 described calls'
 # Write carries no description, so it has no place in an account of purpose.
