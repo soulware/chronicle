@@ -205,6 +205,47 @@ with nothing to say prints nothing rather than an empty stamp.
 State lives in `~/.claude/hooks/state/<session_id>/`, overridable with
 `TS_STATE_DIR`. Tool entries older than a day are swept on each turn.
 
+## Querying the record
+
+The stamps say what a call cost at the moment it cost it. Everything
+retrospective lives in the transcript, which already records every tool call,
+its command, its outcome and an envelope timestamp with milliseconds, and does
+so whether these hooks run or not.
+
+`hooks/ts-query.zsh` reads it. Nothing here writes, keeps state, or needs a key
+registry:
+
+```
+ts-query recent <prefix> [--within 30m]   how often, and when
+ts-query last <prefix>                    outcome and age of the last run
+ts-query transitions <prefix>             where pass and fail changed places
+ts-query elapsed                          span and size of the transcript
+```
+
+Calls are matched on a command prefix rather than a normalised command, which
+makes coarseness a parameter chosen when the question is asked instead of a
+decision baked in when the record is written. `--contains` matches anywhere,
+for work buried inside a compound command: `python3 build.py && cargo test`
+does not start with `cargo test` and never will. A prefix that finds nothing
+reports whether a substring would have, so the silent miss, where a call is
+assumed not to have happened, is not reachable.
+
+Outcomes come from `is_error` on the `tool_result` record, so pass and fail per
+call need no output parsing. The `pipefail` caveat above applies here too: a
+piped failure is recorded as a success.
+
+Every path out is bounded. An unbounded row is how a query tool becomes the
+`cat` it was built to prevent, and 682K of transcript is about 180k tokens.
+
+Durations are computed from envelope timestamps, so they need no cooperation
+from the hooks and are available for calls made before chronicle was installed.
+Measured against chronicle's own stamps on the same calls, the two agree:
+13.1s, 13.9s and 33.1s read back as 13.1s, 13.9s and 33.2s.
+
+`exec` is the exception. It arrives in the `PostToolUse` payload and is written
+nowhere in the transcript, which is why that hook still has a job. See
+[issue #1](https://github.com/soulware/chronicle/issues/1).
+
 ## Install
 
 ```

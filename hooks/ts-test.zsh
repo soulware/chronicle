@@ -64,7 +64,7 @@ print -r -- "=== the manifest is the only list, so it has to match the files ===
 # script. ts-common, ts-manifest and this file are not entry points.
 source "$D/ts-manifest.zsh"
 typeset -a on_disk in_manifest
-on_disk=( ${(f)"$(cd "$D" && print -l -- ts-*.zsh(:r) | grep -vE '^ts-(common|manifest|test)$')"} )
+on_disk=( ${(f)"$(cd "$D" && print -l -- ts-*.zsh(:r) | grep -vE '^ts-(common|manifest|test|query)$')"} )
 in_manifest=( ${(f)"$(ts_scripts)"} )
 typeset -a d_sorted m_sorted
 d_sorted=( ${(o)on_disk} ); m_sorted=( ${(o)in_manifest} )
@@ -317,6 +317,62 @@ t_quiet_or_json "and says nothing it cannot say well" "$out"
 print -r -- "=== a missing transcript is not an error ==="
 out=$(jq -nc '{session_id:"test-sess",transcript_path:"/nope/missing.jsonl",hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh"); rc=$?
 t_eq "precompact exits clean"           "$rc" "0"
+
+print -r -- "=== queries read the transcript and never write to it ==="
+# A synthetic transcript rather than a live one, so the assertions are exact.
+# Three calls: two that start with "cargo test", one that only contains it
+# because the real work is behind a compound command, and an outcome that
+# changes between the first two.
+QT="$TS_STATE_DIR/query-transcript.jsonl"
+{
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"cargo test -p core"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:00:45.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"c1","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:10:00.000Z","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"cargo test -p core --verbose"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:10:04.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"c2","is_error":true}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:20:00.000Z","message":{"content":[{"type":"tool_use","id":"c3","name":"Bash","input":{"command":"python3 build.py && cargo test -p core"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:20:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"c3","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:30:00.000Z","message":{"content":[{"type":"tool_use","id":"c4","name":"Bash","input":{"command":"still running"}}]}}'
+} > "$QT"
+Q=( "$D/ts-query.zsh" --transcript "$QT" )
+
+out=$("${Q[@]}" recent 'cargo test')
+t_match "recent counts prefix matches"    "$out" '^2 calls matching'
+t_absent "and excludes the compound one"  "$out" 'python3 build.py'
+# The duration comes from the envelope timestamps, not from anything chronicle
+# wrote. This is the claim the whole proposal rests on.
+t_match "duration read from the envelope" "$out" '45\.0s'
+t_match "is_error becomes an outcome"     "$out" 'failed'
+
+out=$("${Q[@]}" recent 'cargo test' --contains)
+t_match "contains finds the compound call" "$out" '^3 calls matching'
+
+# A tool_use with no tool_result is a call still in flight, and is left out
+# rather than guessed at.
+t_absent "an unfinished call is not reported" "$("${Q[@]}" recent 'still' --contains 2>&1)" 'still running'
+
+# The dangerous failure is the silent one, so a prefix that matches nothing
+# says whether a substring would have.
+out=$("${Q[@]}" recent 'cargo build' 2>&1); rc=$?
+t_eq    "a miss exits non-zero"           "$rc" "1"
+t_match "and reports the miss"            "$out" 'no calls starting with'
+out=$("${Q[@]}" recent 'test -p core --verb' 2>&1)
+t_match "a buried match is pointed at"    "$out" 'try --contains'
+
+out=$("${Q[@]}" last 'cargo test')
+t_match "last reports the newest outcome" "$out" '^failed, 4\.0s'
+
+out=$("${Q[@]}" transitions 'cargo test')
+t_match "transitions finds the change"    "$out" 'ok -> failed'
+t_eq    "and only the change"             "$(print -r -- "$out" | head -1)" "1 change of outcome for \"cargo test\""
+
+# Bounded output is the point of wrapping the query at all: an unbounded row is
+# how a query tool becomes the cat it was built to prevent.
+long=$(print -r -- "$("${Q[@]}" recent '' --contains)" | awk '{ if (length($0) > n) n = length($0) } END { print n }')
+(( long <= 120 )) && t_ok "every row stays bounded" \
+  || t_bad "every row stays bounded" "longest row was $long chars"
+
+out=$("$D/ts-query.zsh" --transcript /nope/missing.jsonl recent x 2>&1); rc=$?
+t_eq "an unreadable transcript exits 2"   "$rc" "2"
 
 print -r -- ""
 if (( FAIL )); then
