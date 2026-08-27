@@ -216,11 +216,34 @@ so whether these hooks run or not.
 registry:
 
 ```
+ts-query touched <path>                   every read and write of a file
 ts-query recent <prefix> [--within 30m]   how often, and when
 ts-query last <prefix>                    outcome and age of the last run
 ts-query transitions <prefix>             where pass and fail changed places
 ts-query elapsed                          span and size of the transcript
 ```
+
+`touched` is the reliable one and the rest are the approximate ones, because
+the tools differ in what they record. `Edit`, `Write` and `Read` carry a
+`file_path`, which is an absolute path and therefore an exact key: no prefix,
+no normalisation, no coarseness to tune. `Bash` carries one free-form string,
+which is why every other query here has to guess.
+
+```
+2 operations on "ts-tool-post.zsh"
+  2026-08-27T09:35:59Z  Write
+  2026-08-27T09:42:18Z  Edit    +17 -1     modified by user
+```
+
+The counts come from `structuredPatch` in the tool result, which holds the real
+diff. `userModified` records the human quietly fixing what the model wrote, and
+nothing else in the record exposes that.
+
+A file changed by a shell command has no structured record at all, so `touched`
+distinguishes the two silences: nothing found, versus nothing found *and* four
+shell commands that mention the file. An empty answer that reads as "untouched"
+when it means "not touched through a tool that records it" is the same failure
+as a stamp that quietly stops firing.
 
 Calls are matched on a command prefix rather than a normalised command, which
 makes coarseness a parameter chosen when the question is asked instead of a
@@ -236,6 +259,13 @@ piped failure is recorded as a success.
 
 Every path out is bounded. An unbounded row is how a query tool becomes the
 `cat` it was built to prevent, and 682K of transcript is about 180k tokens.
+
+Calls that invoked `ts-query` itself are excluded, because querying is done by
+running commands and a query about commands otherwise counts its own history.
+The count of what was dropped is always reported, and only exclusions the query
+would have returned are counted. `--include-meta` keeps them. File queries need
+none of this: interrogating the record cannot produce an `Edit`, so a query
+keyed on a path can never match itself.
 
 Durations are computed from envelope timestamps, so they need no cooperation
 from the hooks and are available for calls made before chronicle was installed.

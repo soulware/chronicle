@@ -13,10 +13,20 @@
 # error into a visible one: too short over-matches and costs a rerun, too long
 # returns nothing at all and says so.
 #
+#   ts-query touched <path>                   every read and write of a file
 #   ts-query recent <prefix> [--within 30m]   how often, and when
 #   ts-query last <prefix>                    outcome and age of the last run
 #   ts-query transitions <prefix>             where pass and fail changed places
 #   ts-query elapsed                          session, last turn, last stop
+#
+# `touched` is the reliable one and the rest are the approximate ones. Edit,
+# Write and Read carry a file_path, which is an absolute path and therefore an
+# exact key: no prefix, no normalisation, no coarseness to tune. Bash carries
+# one free-form string, which is why everything else here has to guess.
+#
+# It is also immune to a problem the command queries have. Querying is done by
+# running commands, so a query about commands can match earlier queries. It can
+# never produce an Edit, so a query about files cannot match itself.
 #
 # --transcript PATH overrides the file. With no override the newest transcript
 # for the current directory's project is used.
@@ -113,12 +123,33 @@ JQ_CALLS='
         ] | @tsv)[]
 '
 
+JQ_FILES='
+  def adds($p): [$p[]? | .lines[]? | select(startswith("+"))] | length;
+  def dels($p): [$p[]? | .lines[]? | select(startswith("-"))] | length;
+  (map(select(.toolUseResult | type == "object")
+       | {id: (.message.content[0].tool_use_id // ""),
+          patch: (.toolUseResult.structuredPatch // []),
+          um: (.toolUseResult.userModified // false)})
+   | INDEX(.id)) as $res
+  | map(select(.type == "assistant" and (.message.content | type) == "array")
+        | .timestamp as $ts
+        | .message.content[]
+        | select(.type == "tool_use" and (.input.file_path != null))
+        | . as $u
+        | ($res[$u.id] // {}) as $r
+        | [ $ts, $u.name, $u.input.file_path,
+            (adds($r.patch)), (dels($r.patch)),
+            (if $r.um then "modified by user" else "" end)
+          ] | @tsv)[]
+'
+
 transcript=""
 typeset -a rest
 while (( $# )); do
   case "$1" in
     --transcript) transcript=$2; shift 2 ;;
     --contains)   contains=1; shift ;;
+    --include-meta) include_meta=1; shift ;;
     --within)     within=$2; shift 2 ;;
     *)            rest+=("$1"); shift ;;
   esac
@@ -155,16 +186,35 @@ iso_ep() { local -x TZ=UTC; strftime -r '%Y-%m-%dT%H:%M:%S' "${1%%.*}" 2>/dev/nu
 # `cargo test` and never will. When a prefix finds nothing the caller is told
 # whether a substring would have, rather than being left to conclude the call
 # never happened.
+# A call that invoked this tool is the tool looking at itself, and counting it
+# inflates every answer the more the tool is used. Recognised by the script
+# name next to one of its own verbs, which is a heuristic: it deliberately does
+# not match `cat hooks/ts-query.zsh`, which is work on the file rather than a
+# query. --include-meta keeps them, and the count of what was dropped is always
+# reported, because a query that silently discards rows is the same failure as
+# a stamp that silently stops firing.
+typeset -i META=0
+is_meta() {
+  [[ "$1" =~ 'ts-query(\.zsh)?[^;|]*(touched|recent|last|transitions|elapsed)' ]]
+}
+
+matches() {
+  local prefix=$1 command=$2 tool=$3
+  [[ -z "$prefix" ]] && return 0
+  if (( ${contains:-0} )); then
+    [[ "$command" == *"$prefix"* || "$tool" == *"$prefix"* ]]
+  else
+    [[ "$command" == "$prefix"* || "$tool" == "$prefix"* ]]
+  fi
+}
+
 filter() {
   local prefix=$1
   print -r -- "$rows" | while IFS=$'\t' read -r start end secs outcome tool command; do
     [[ -n "$start" ]] || continue
-    if [[ -n "$prefix" ]]; then
-      if (( ${contains:-0} )); then
-        [[ "$command" == *"$prefix"* || "$tool" == *"$prefix"* ]] || continue
-      else
-        [[ "$command" == "$prefix"* || "$tool" == "$prefix"* ]] || continue
-      fi
+    matches "$prefix" "$command" "$tool" || continue
+    if (( ! ${include_meta:-0} )) && is_meta "$command"; then
+      (( META++ )); continue
     fi
     if (( cutoff )); then
       local e=$(iso_ep "$start"); [[ -n "$e" ]] && (( e >= cutoff )) || continue
@@ -173,7 +223,53 @@ filter() {
   done
 }
 
+# Only exclusions the query would otherwise have returned are worth reporting.
+# Counting every meta call regardless of the prefix announces a drop that never
+# affected the answer, which is noise dressed as disclosure.
+meta_note() {
+  local prefix=$1
+  local n=$(print -r -- "$rows" | while IFS=$'\t' read -r a b c d tool command; do
+              is_meta "$command" && matches "$prefix" "$command" "$tool" && print x
+            done | wc -l | tr -d " ")
+  (( n && ! ${include_meta:-0} )) &&
+    print -r -- "($n call$( (( n == 1 )) || print s ) of ts-query itself excluded; --include-meta to keep)"
+  return 0
+}
+
 case "$cmd" in
+
+touched)
+  # Neither `path` nor `fpath` may be used as a variable name here: zsh ties
+  # both to PATH and to the function search path, so assigning either breaks
+  # command lookup for the rest of the script.
+  want=${2:-}
+  [[ -n "$want" ]] || die "usage: ts-query touched <path>"
+  frows=$(jq -r "$JQ_FILES" -s "$transcript" 2>/dev/null) || die "could not parse $transcript"
+  matched=$(print -r -- "$frows" | while IFS=$'\t' read -r ts tool f a d um; do
+    [[ -n "$ts" ]] || continue
+    # An absolute path is an exact key, so a suffix match is the whole of the
+    # matching logic: the caller types what they would type in the shell.
+    [[ "$f" == "$want" || "$f" == */"$want" ]] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$tool" "$f" "$a" "$d" "$um"
+  done)
+  if [[ -z "$matched" ]]; then
+    print -r -- "no Edit, Write or Read of \"$want\""
+    # A file changed by a shell command has no structured record, so silence
+    # here would read as "untouched" when it means "not touched through a tool
+    # that records it". Say which of the two it is.
+    local seen=$(print -r -- "$rows" | cut -f6 | grep -cF -- "${want:t}" || true)
+    (( seen )) && print -r -- \
+      "but $seen shell command$( (( seen == 1 )) || print s ) mention ${want:t}; a file edited by a script leaves no structured record"
+    exit 1
+  fi
+  n=$(print -r -- "$matched" | wc -l | tr -d " ")
+  print -r -- "$n operation$( (( n == 1 )) || print s ) on \"$want\""
+  print -r -- "$matched" | tail -15 | while IFS=$'\t' read -r ts tool f a d um; do
+    ch=""
+    (( a || d )) && ch="+$a -$d"
+    printf '  %s  %-6s  %-10s %s\n' "${ts:0:19}Z" "$tool" "$ch" "$um"
+  done
+  ;;
 
 recent)
   prefix=${2:-}
@@ -193,6 +289,7 @@ recent)
     exit 1
   fi
   print -r -- "$n call$( (( n == 1 )) || print s ) matching \"$prefix\"$window"
+  meta_note "$prefix"
   print -r -- "$matched" | tail -10 | while IFS=$'\t' read -r start end secs outcome tool command; do
     printf '  %s  %8s  %-6s  %s\n' "${start:11:8}Z" "$(fmt_dur $secs)" "$outcome" "${command:0:70}"
   done

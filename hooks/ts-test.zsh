@@ -383,6 +383,56 @@ out=$("$D/ts-query.zsh" --transcript "$ST" recent echo 2>&1)
 t_match "a subagent transcript reads normally" "$out" '^1 call matching'
 t_match "with its duration intact"             "$out" '3\.0s'
 
+print -r -- "=== file queries are exact where command queries have to guess ==="
+# Edit, Write and Read carry an absolute file_path, so identity needs no
+# normalisation. structuredPatch carries the real diff and userModified records
+# the human quietly fixing what the model wrote.
+FT="$TS_STATE_DIR/file-transcript.jsonl"
+{
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"f1","name":"Write","input":{"file_path":"/repo/src/main.rs","content":"x"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:00:01.000Z","toolUseResult":{"filePath":"/repo/src/main.rs","structuredPatch":[],"userModified":false},"message":{"content":[{"type":"tool_result","tool_use_id":"f1","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:05:00.000Z","message":{"content":[{"type":"tool_use","id":"f2","name":"Edit","input":{"file_path":"/repo/src/main.rs","old_string":"a","new_string":"b"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:05:01.000Z","toolUseResult":{"filePath":"/repo/src/main.rs","structuredPatch":[{"lines":["-a","+b","+c"]}],"userModified":true},"message":{"content":[{"type":"tool_result","tool_use_id":"f2","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:09:00.000Z","message":{"content":[{"type":"tool_use","id":"f3","name":"Bash","input":{"command":"sed -i s/a/b/ /repo/src/other.rs"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:09:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"f3","is_error":false}]}}'
+} > "$FT"
+FQ=( "$D/ts-query.zsh" --transcript "$FT" )
+
+out=$("${FQ[@]}" touched src/main.rs)
+t_match "a suffix matches the absolute path" "$out" '^2 operations'
+t_match "the diff comes from structuredPatch" "$out" '\+2 -1'
+# Nothing else in the record exposes the user silently correcting the model.
+t_match "userModified is surfaced"           "$out" 'modified by user'
+
+# The dangerous answer is the one that reads as "untouched" when it means "not
+# touched through a tool that records it".
+out=$("${FQ[@]}" touched other.rs 2>&1); rc=$?
+t_eq    "a shell-only change is not a match"  "$rc" "1"
+t_match "and is not reported as untouched"    "$out" 'shell command'
+out=$("${FQ[@]}" touched never-seen.rs 2>&1)
+t_absent "a genuinely absent file says no more" "$out" 'shell command'
+
+# Querying is done by running commands, so a command query can count itself.
+MT="$TS_STATE_DIR/meta-transcript.jsonl"
+{
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"cargo test"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:00:05.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m1","is_error":false}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:01:00.000Z","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"zsh hooks/ts-query.zsh recent cargo test"}}]}}'
+  print -r -- '{"type":"user","timestamp":"2026-08-27T09:01:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m2","is_error":false}]}}'
+} > "$MT"
+out=$("$D/ts-query.zsh" --transcript "$MT" recent cargo --contains)
+t_match "the tool excludes its own calls"   "$out" '^1 call matching'
+t_match "and says that it did"              "$out" 'excluded'
+out=$("$D/ts-query.zsh" --transcript "$MT" recent cargo --contains --include-meta)
+t_match "include-meta keeps them"           "$out" '^2 calls matching'
+# Work on the script is not a query of it, so the exclusion has to distinguish
+# invoking ts-query from merely naming the file.
+print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"m3","name":"Bash","input":{"command":"cat -n hooks/ts-query.zsh"}}]}}' >> "$MT"
+print -r -- '{"type":"user","timestamp":"2026-08-27T09:02:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m3","is_error":false}]}}' >> "$MT"
+out=$("$D/ts-query.zsh" --transcript "$MT" recent cat --contains)
+t_match "reading the script is not a query" "$out" '^1 call matching'
+t_absent "so nothing is excluded for it"    "$out" 'excluded'
+
 out=$("$D/ts-query.zsh" --transcript /nope/missing.jsonl recent x 2>&1); rc=$?
 t_eq "an unreadable transcript exits 2"   "$rc" "2"
 
