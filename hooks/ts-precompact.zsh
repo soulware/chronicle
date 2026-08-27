@@ -3,6 +3,10 @@
 # say so in the scrollback. Nothing is written down for the model: the boundary
 # lands in the transcript as a compact_boundary record, and the next turn stamp
 # reads it from there.
+#
+# The payload names whether the compaction was manual or automatic. That is not
+# reported: it is the one fact here the transcript does not hold, and carrying
+# it would mean keeping a state file for a single attribute.
 emulate -L zsh
 source "${0:A:h}/ts-common.zsh"
 
@@ -10,8 +14,6 @@ payload=$(cat)
 session=$(print -r -- "$payload" | jq -r '.session_id // "unknown"' 2>/dev/null)
 session=${session//[^A-Za-z0-9_-]/_}
 tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
-trigger=$(print -r -- "$payload" | jq -r '.trigger // .trigger_reason // "unknown"' 2>/dev/null)
-trigger=${trigger//[^A-Za-z0-9_-]/}
 
 [[ -r "$tp" ]] || exit 0
 
