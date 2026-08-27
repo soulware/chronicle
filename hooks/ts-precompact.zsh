@@ -1,8 +1,8 @@
 #!/bin/zsh
-# PreCompact: measure the stretch of transcript about to be summarised away.
-# The facts are written to state rather than emitted, because anything this
-# event returns is itself subject to the compaction. ts-postcompact.zsh
-# delivers them on the far side.
+# PreCompact: measure the stretch of transcript about to be summarised away and
+# say so in the scrollback. Nothing is written down for the model: the boundary
+# lands in the transcript as a compact_boundary record, and the next turn stamp
+# reads it from there.
 emulate -L zsh
 source "${0:A:h}/ts-common.zsh"
 
@@ -13,8 +13,6 @@ tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
 trigger=$(print -r -- "$payload" | jq -r '.trigger // .trigger_reason // "unknown"' 2>/dev/null)
 trigger=${trigger//[^A-Za-z0-9_-]/}
 
-dir="${TS_STATE_DIR}/${session}"
-mkdir -p "$dir" || exit 0
 [[ -r "$tp" ]] || exit 0
 
 # A previous boundary marks where the last summary already covers, so the span
@@ -26,8 +24,6 @@ from=$(jq -r 'select(.type=="system" and .subtype=="compact_boundary") | .timest
 prompts=$(jq -r --arg f "$from" '
   select(.type=="user" and (.message.content | type == "string"))
   | select(.timestamp > $f) | .timestamp' "$tp" 2>/dev/null | wc -l | tr -d ' ')
-
-print -r -- "$from|$trigger|$prompts" > "$dir/compaction"
 
 start=$(ts_iso_to_epoch "$from")
 [[ -n "$start" ]] && span=$(ts_fmt_dur $((EPOCHSECONDS - start))) || span=unknown

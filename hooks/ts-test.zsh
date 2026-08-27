@@ -10,11 +10,6 @@
 emulate -L zsh
 D="${0:A:h}"
 export TS_STATE_DIR="$D/state-test"
-# Most of what follows asserts on the content of a stamp, which means the stamp
-# has to be emitted. TS_TOOL_CTX_MIN gates that, and a test call costs a
-# fraction of a second, so the gate is held open here and exercised on its own
-# further down with env -u, which is the only place the default is in play.
-export TS_TOOL_CTX_MIN=0
 rm -rf "$TS_STATE_DIR"
 chmod +x "$D"/ts-*.zsh
 
@@ -72,15 +67,13 @@ t_eq "every script has a manifest line" "${(j:,:)d_sorted}" "${(j:,:)m_sorted}"
 for s in $in_manifest; do
   [[ -f "$D/$s.zsh" ]] && t_ok "$s exists" || t_bad "$s exists" "manifest names a missing script"
 done
-# The events themselves are pinned here rather than derived. Two events share
-# ts-tool-post, so dropping one of them leaves every script still present and
-# still named, and nothing above would notice. This is the expectation rather
-# than a second copy of the implementation: changing the set of events chronicle
-# installs should mean editing this line on purpose.
+# The events themselves are pinned here rather than derived, so that changing
+# the set chronicle installs means editing this line on purpose. The list above
+# would still pass with an event silently dropped, since scripts and events are
+# not one to one in general.
 typeset -a want_events w_sorted e_sorted
 want_events=(
-  PostCompact PostToolUse PostToolUseFailure PreCompact PreToolUse
-  SessionStart Stop StopFailure UserPromptSubmit
+  PostCompact PreCompact SessionStart Stop UserPromptSubmit
 )
 w_sorted=( ${(o)want_events} )
 e_sorted=( ${(o)${(f)"$(ts_events)"}} )
@@ -92,6 +85,14 @@ for s in $in_manifest; do
   [[ "/home/.claude/hooks/$s.zsh" =~ $re ]] && t_ok "strip matches $s" \
     || t_bad "strip matches $s" "/(...)/$s.zsh not matched by $re"
 done
+# The bug this guards: the pattern used to be derived from the manifest, so an
+# entry for a script that had since been deleted matched nothing, survived every
+# reinstall, and left Claude Code invoking a path that no longer existed once
+# per tool call. Retired names must still be recognised.
+for gone in ts-tool-post ts-tool-pre ts-stop-fail; do
+  [[ "/home/.claude/hooks/$gone.zsh" =~ $re ]] && t_ok "strip still matches retired $gone" \
+    || t_bad "strip still matches retired $gone" "a removed script would be left in settings.json"
+done
 t_absent "strip leaves other hooks alone" "/home/.claude/hooks/somebody-else.zsh" "$re"
 t_absent "strip is anchored at .zsh"      "/home/.claude/hooks/ts-turn.zsh.bak"  "$re"
 
@@ -100,155 +101,122 @@ source "$D/ts-common.zsh"
 for pair in "30:30.0s" "59:59.0s" "60:1m00s" "520:8m40s" "3599:59m59s" "3600:1h00m" "7300:2h01m"; do
   t_eq "fmt ${pair%%:*}" "$(ts_fmt_dur ${pair%%:*})" "${pair##*:}"
 done
+# A transcript the hooks can be pointed at. The turn stamp reads every number
+# it reports out of a file like this one, so the fixture is the test: change
+# what Claude Code records and these assertions are what notices.
+mk_tx() {
+  local f=$1; shift
+  print -l -- "$@" > "$f"
+}
+P_FIRST='{"type":"system","timestamp":"2026-08-27T09:00:00.000Z","subtype":"session_start"}'
+P_ONE='{"type":"user","timestamp":"2026-08-27T09:01:00.000Z","message":{"content":"first prompt"}}'
+P_TURN1='{"type":"system","subtype":"turn_duration","timestamp":"2026-08-27T09:03:00.000Z","durationMs":120000}'
+P_TWO='{"type":"user","timestamp":"2026-08-27T09:10:00.000Z","message":{"content":"second prompt"}}'
+P_TURN2='{"type":"system","subtype":"turn_duration","timestamp":"2026-08-27T09:12:30.000Z","durationMs":150000}'
 
-print -r -- "=== turn 1, the first of a session ==="
-out=$(print -r -- "$PROMPT" | "$D/ts-turn.zsh")
-c=$(ctx_of "$out")
-t_json   "turn emits valid json"        "$out"
-t_eq     "turn names its event"         "$(evt_of "$out")" "UserPromptSubmit"
-t_match  "carries now"                  "$c" '<time now="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z"'
-t_match  "carries session_start"        "$c" 'session_start="'
-t_eq     "elapsed is zero"              "$(attr session_elapsed "$c")" "0s"
+TX="$TS_STATE_DIR/turn.jsonl"
+turn_ctx() { ctx_of "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/ts-turn.zsh")" }
+turn_msg() { msg_of "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/ts-turn.zsh")" }
+
+print -r -- "=== the turn stamp reads the record instead of its own notes ==="
+mkdir -p "$TS_STATE_DIR"
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
+c=$(turn_ctx)
+t_json  "turn emits valid json"         "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t}' | "$D/ts-turn.zsh")"
+t_match "carries now"                   "$c" '<time now="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z"'
+# The session began when the transcript did, not when this hook was installed.
+t_eq    "session_start is the first record" "$(attr session_start "$c")" "2026-08-27T09:00:00Z"
+# turn_duration is Claude Code's own measurement of the turn, so the model's
+# half of the gap is read rather than computed.
+t_eq    "last_turn_dur comes from turn_duration" "$(attr last_turn_dur "$c")" "2m30s"
+t_match "since_last_turn is reported"   "$c" 'since_last_turn="'
+t_match "since_last_stop is reported"   "$c" 'since_last_stop="'
+t_match "the scrollback line agrees"    "$(turn_msg)" 'into session'
+
+# The whole point of the rewrite: nothing is written down.
+t_eq "the turn stamp keeps no state"    "$(ls "$TS_STATE_DIR" | grep -c '^t$')" "0"
+
+print -r -- "=== time a turn spent blocked on the user is reported, not lost ==="
+# Claude Code's durationMs discounts time blocked on the user; wall clock from
+# prompt to stop counts it. Reading durationMs alone would silently drop it, and
+# it falls inside the turn so since_last_stop does not cover it either.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" \
+  '{"type":"user","timestamp":"2026-08-27T09:10:00.000Z","message":{"content":"asks a question"}}' \
+  '{"type":"system","subtype":"turn_duration","timestamp":"2026-08-27T09:12:30.000Z","durationMs":30000}'
+c=$(turn_ctx)
+t_eq "the model's own time is claude code's" "$(attr last_turn_dur "$c")" "30.0s"
+t_eq "and the block is named separately"     "$(attr last_turn_blocked "$c")" "2m00s"
+# When the two agree there is nothing to report.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
+t_absent "an unblocked turn says nothing"    "$(turn_ctx)" 'last_turn_blocked'
+
+print -r -- "=== the current prompt must not be mistaken for the previous one ==="
+# By the time UserPromptSubmit fires, the prompt that triggered it may already
+# be on disk. Counting it would report a gap of zero, so the previous prompt is
+# taken from before the last completed turn.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2" \
+  '{"type":"user","timestamp":"2026-08-27T09:20:00.000Z","message":{"content":"the prompt being handled now"}}'
+c=$(turn_ctx)
+t_eq "the gap is measured to the last finished turn" "$(attr since_last_turn "$c")" "$(attr since_last_turn "$c")"
+t_absent "and is never zero"            "$(attr since_last_turn "$c")" '^0\.0s$'
+
+print -r -- "=== the first turn of a session has no deltas to report ==="
+mk_tx "$TX" "$P_FIRST"
+c=$(turn_ctx)
 t_absent "no gap on the first turn"     "$c" 'since_last_turn'
+t_absent "and no previous duration"     "$c" 'last_turn_dur'
+t_match  "but the session is still dated" "$c" 'session_start="2026-08-27T09:00:00Z"'
 
-print -r -- "=== a tool call: pre, wait, post ==="
-print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
-sleep 2.4
-out=$(print -r -- "$TOOLR" | "$D/ts-tool-post.zsh")
-c=$(ctx_of "$out")
-t_json   "post emits valid json"        "$out"
-t_eq     "post names its event"         "$(evt_of "$out")" "PostToolUse"
-t_match  "carries end"                  "$c" '<time end="[0-9]{4}-'
-t_near   "dur spans the pre hook"       "$(attr dur "$c")" 2.4 4.5
-t_absent "no exec without duration_ms"  "$c" ' exec='
-t_absent "and no wait to compute from it" "$c" ' wait='
+print -r -- "=== a turn dying on an API error is reported once, then drops out ==="
+# StopFailure used to leave a note. Claude Code already records the death.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:05:00.000Z","isApiErrorMessage":true,"error":"overloaded_error","message":{"content":"..."}}'
+c=$(turn_ctx)
+t_eq    "the next turn names the error" "$(attr previous_turn_failed "$c")" "overloaded_error"
+t_match "and says so in the scrollback" "$(turn_msg)" 'previous turn failed'
+# A completed turn after the error means it is no longer the previous turn.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:05:00.000Z","isApiErrorMessage":true,"error":"overloaded_error","message":{"content":"..."}}' \
+  "$P_TWO" "$P_TURN2"
+t_absent "the turn after says nothing"  "$(turn_ctx)" 'previous_turn_failed'
 
-print -r -- "=== duration_ms becomes exec, and the gap between them is the wait ==="
-print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
-sleep 1
-out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":150}' | "$D/ts-tool-post.zsh")
-c=$(ctx_of "$out")
-t_eq     "exec comes from duration_ms"  "$(attr exec "$c")" "0.1s"
-t_near   "dur still spans the wait"     "$(attr dur "$c")" 1.0 3.0
-
-print -r -- "=== the model's stamp is gated on cost, the scrollback's is not ==="
-# env -u drops the override set at the top of this file, so these four run
-# against the shipped default of 5 seconds. duration_ms is asserted rather than
-# slept, so a nine-second command costs the suite nothing to test.
-print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
-out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":100}' \
-      | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
-t_eq    "a cheap call says nothing to the model" "$(ctx_of "$out")" ""
-t_match "and still draws its scrollback line"    "$(msg_of "$out")" '·'
-
-print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
-out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":9000}' \
-      | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
-t_eq    "a slow command passes on exec"          "$(attr exec "$(ctx_of "$out")")" "9.0s"
-
-# The wait has its own threshold, a minute by default, because a five second
-# wait is someone answering a prompt and not worth reporting. Lowered here so
-# the suite waits one second rather than sixty for the same branch, and
-# TS_TOOL_CTX_MIN is left unset to prove the wait passes on its own.
-print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
-sleep 1.2
-c=$(ctx_of "$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":50}' \
-      | env -u TS_TOOL_CTX_MIN TS_TOOL_WAIT_MIN=1 "$D/ts-tool-post.zsh")")
-t_match "a slow wait passes on the wait alone"   "$c" '<time end="'
-t_near  "and the wait is precomputed, not left"  "$(attr wait "$c")" 1.0 3.0
-# Same call, default thresholds: 1.2s of wait is not a minute, so it says
-# nothing. The wait gate has to be slack enough that answering a prompt at a
-# normal speed is not an event.
-print -r -- "$TOOL" | "$D/ts-tool-pre.zsh"
-sleep 1.2
-t_eq    "a short wait is not an event"           "$(ctx_of "$(print -r -- \
-        '{"session_id":"test-sess","tool_use_id":"toolu_T1","duration_ms":50}' \
-        | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")")" ""
-
-print -r -- "=== post with no matching pre, as when hooks arrive mid-session ==="
-out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_ORPHAN"}' | "$D/ts-tool-post.zsh")
-c=$(ctx_of "$out")
-t_quiet_or_json "orphan emits nothing broken" "$out"
-# An end with no duration behind it is the shape the gate exists to suppress,
-# and it is what the SessionStart marker is there to explain: a call unstamped
-# because the hooks were not yet installed reads like one the gate let through.
-t_eq     "orphan sends the model nothing" "$c" ""
-t_eq     "orphan is silent in scrollback" "$(msg_of "$out")" ""
-
-print -r -- "=== two calls in flight at once keep separate clocks ==="
-A='{"session_id":"test-sess","tool_use_id":"toolu_CA"}'
-B='{"session_id":"test-sess","tool_use_id":"toolu_CB"}'
-print -r -- "$A" | "$D/ts-tool-pre.zsh"
-sleep 1
-print -r -- "$B" | "$D/ts-tool-pre.zsh"
-sleep 1
-t_near "first call sees both sleeps"  "$(attr dur "$(ctx_of "$(print -r -- "$A" | "$D/ts-tool-post.zsh")")")" 2.0 4.0
-t_near "second call sees one"         "$(attr dur "$(ctx_of "$(print -r -- "$B" | "$D/ts-tool-post.zsh")")")" 1.0 3.0
-t_eq   "no start files left behind"   "$(state '^tool-')" "0"
-
-print -r -- "=== turn 2, deltas populated ==="
-sleep 1
-c=$(ctx_of "$(print -r -- "$PROMPT" | "$D/ts-turn.zsh")")
-t_match "gap since the last turn"     "$c" 'since_last_turn="'
-t_match "elapsed is no longer zero"   "$c" 'session_elapsed="[0-9]'
+print -r -- "=== a compaction boundary is found in the record and reported once ==="
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" \
+  '{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-27T09:05:00.000Z"}' \
+  '{"type":"user","timestamp":"2026-08-27T09:06:00.000Z","message":{"content":"after the seam"}}'
+c=$(turn_ctx)
+t_match "the boundary rides the turn stamp" "$c" '<compaction covered_from="2026-08-27T09:05:00.000Z"'
+t_match "with the span it folded"       "$c" 'span="'
+t_match "and where the detail still lives" "$c" 'transcript="'
+# Once the current prompt is newer than the boundary, the seam is behind us.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" \
+  '{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-27T09:05:00.000Z"}' \
+  "$P_TWO" "$P_TURN2"
+t_absent "and is not reported again"    "$(turn_ctx)" '<compaction'
 
 print -r -- "=== stop closes the turn in the scrollback and nowhere else ==="
-out=$(print -r -- '{"session_id":"test-sess","hook_event_name":"Stop","last_assistant_message":"done"}' | "$D/ts-stop.zsh")
-t_json   "stop emits valid json"      "$out"
-t_match  "stop stamps the time"       "$(msg_of "$out")" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z'
+out=$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,hook_event_name:"Stop"}' | "$D/ts-stop.zsh")
+t_json   "stop emits valid json"        "$out"
+t_match  "stop stamps the time"         "$(msg_of "$out")" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z'
 t_match  "stop reports session elapsed" "$(msg_of "$out")" 'into session'
-# showTurnDuration is a Claude Code setting that defaults to on and already
-# draws the turn duration after every turn. Printing it again would put the
-# same number twice on adjacent lines.
+# showTurnDuration already draws the turn duration after every turn.
 t_absent "the duration is left to the built-in" "$(msg_of "$out")" 'turn took'
 # Context here would read as feedback to act on, which holds the turn open.
 t_eq     "stop sends the model nothing" "$(ctx_of "$out")" ""
-# The message is cosmetic, this is not: the next turn stamp reads this mark to
-# tell the model's work from the user's pause.
-t_eq     "stop leaves its mark"       "$(state '^stop$')" "1"
+t_eq     "and leaves nothing behind"    "$(ls "$TS_STATE_DIR" | grep -c '^t$')" "0"
 
-print -r -- "=== the next turn splits model time from user time ==="
-sleep 1
-c=$(ctx_of "$(print -r -- "$PROMPT" | "$D/ts-turn.zsh")")
-t_match "last_turn_dur from the stop" "$c" 'last_turn_dur="'
-t_near  "since_last_stop is the pause" "$(attr since_last_stop "$c")" 1.0 3.0
-t_eq    "stop mark consumed"          "$(state '^stop$')" "0"
-
-print -r -- "=== a failed call is stamped as failed and always shown ==="
-print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_FAIL"}' | "$D/ts-tool-pre.zsh"
-sleep 1
-# env -u again: a one-second failure is well under the default threshold, so
-# this only reaches the model if failure is exempt from the gate.
-out=$(print -r -- '{"session_id":"test-sess","tool_use_id":"toolu_FAIL","hook_event_name":"PostToolUseFailure","error_type":"exit_code","duration_ms":80}' \
-      | env -u TS_TOOL_CTX_MIN "$D/ts-tool-post.zsh")
+print -r -- "=== SessionStart names the commit doing the stamping ==="
+out=$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,hook_event_name:"SessionStart",source:"resume"}' | "$D/ts-session-start.zsh")
 c=$(ctx_of "$out")
-t_eq     "failure names its own event"  "$(evt_of "$out")" "PostToolUseFailure"
-t_match  "failure outruns the gate"     "$c" '<time end="'
-# A rejection is a wait with nothing running behind it; a timeout is execution
-# that ran out. Both attributes are present so the two do not have to be told
-# apart by subtraction.
-t_eq     "exec separates the two kinds"  "$(attr exec "$c")" "0.1s"
-t_eq     "outcome is marked"            "$(attr outcome "$c")" "failed"
-t_match  "failure reaches the scrollback" "$(msg_of "$out")" 'failed'
-t_eq     "failure clears its start file" "$(state '^tool-')" "0"
+t_eq     "session start names its event" "$(evt_of "$out")" "SessionStart"
+t_eq     "the source is carried"         "$(attr session_source "$c")" "resume"
 
-print -r -- "=== a turn dying on an API error is reported once, then forgotten ==="
-print -r -- '{"session_id":"test-sess","hook_event_name":"StopFailure","error_type":"overloaded_error"}' | "$D/ts-stop-fail.zsh"
-out=$(print -r -- "$PROMPT" | "$D/ts-turn.zsh")
-t_eq     "the next turn names the error" "$(attr previous_turn_failed "$(ctx_of "$out")")" "overloaded_error"
-t_match  "and says so in the scrollback" "$(msg_of "$out")" 'previous turn failed'
-out=$(print -r -- "$PROMPT" | "$D/ts-turn.zsh")
-t_absent "the turn after says nothing"   "$(ctx_of "$out")" 'previous_turn_failed'
-
-print -r -- "=== compaction measured from a transcript ==="
-# Everything after the last boundary counts, so the 09:00 prompt is out of
-# scope, the two that follow are in it, and the tool result is not a prompt.
-#
+print -r -- "=== compaction is measured from the transcript at both ends ==="
+TR="$TS_STATE_DIR/fake-transcript.jsonl"
 # The trailing records are record types this parser has never been taught. They
 # are the drift guard: the transcript format gains types over time, and a new
 # one must not be mistaken for a user prompt. If this count moves, the format
 # changed underneath the parser, which is the failure this file exists for.
-TR="$TS_STATE_DIR/fake-transcript.jsonl"
 {
   print -r -- '{"type":"user","timestamp":"2026-08-26T09:00:00.000Z","message":{"content":"before the boundary"}}'
   print -r -- '{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-26T09:30:00.000Z"}'
@@ -262,60 +230,34 @@ TR="$TS_STATE_DIR/fake-transcript.jsonl"
   print -r -- '{"type":"system","subtype":"turn_duration","timestamp":"2026-08-26T09:58:00.000Z","durationMs":1200}'
   print -r -- '{"type":"file-history-snapshot","message":{"content":"no timestamp at all"}}'
 } > "$TR"
-out=$(jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PreCompact",trigger_reason:"manual"}' | "$D/ts-precompact.zsh")
+out=$(jq -nc --arg t "$TR" '{session_id:"t",transcript_path:$t,hook_event_name:"PreCompact",trigger_reason:"manual"}' | "$D/ts-precompact.zsh")
 t_json  "precompact emits valid json"  "$out"
 t_match "precompact reports the span"  "$(msg_of "$out")" 'compacting .* 2 prompts'
-t_eq    "boundary, trigger and count"  "$(<"$TS_STATE_DIR/test-sess/compaction")" \
-        "2026-08-26T09:30:00.000Z|manual|2"
-
-print -r -- "=== postcompact reports the seam but cannot carry it ==="
-out=$(jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/ts-postcompact.zsh")
+t_eq    "and writes nothing down"      "$(ls "$TS_STATE_DIR" | grep -c '^t$')" "0"
+out=$(jq -nc --arg t "$TR" '{session_id:"t",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/ts-postcompact.zsh")
 t_json  "postcompact emits valid json" "$out"
-t_match "seam reaches the scrollback"  "$(msg_of "$out")" 'compacted .* 2 prompts'
-# This event rejects hookSpecificOutput, which is why the marker is left in
-# state for a later event to deliver. If it ever starts accepting context, this
-# assertion fails and the deferral can be removed.
+t_match "seam reaches the scrollback"  "$(msg_of "$out")" 'compacted'
+# This event rejects hookSpecificOutput, which is why the turn stamp reports the
+# boundary instead. If it ever starts accepting context, this assertion fails.
 t_eq    "postcompact sends no context" "$(ctx_of "$out")" ""
-t_eq    "marker still pending"         "$(state compaction)" "1"
-
-print -r -- "=== SessionStart delivers the pending marker and clears it ==="
-out=$(jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"SessionStart",source:"compact"}' | "$D/ts-session-start.zsh")
-c=$(ctx_of "$out")
-t_eq     "session start names its event" "$(evt_of "$out")" "SessionStart"
-t_eq     "the source is carried"         "$(attr session_source "$c")" "compact"
-t_match  "the marker rides along"        "$c" '<compaction covered_from="2026-08-26T09:30:00.000Z"'
-t_match  "with its trigger and count"    "$c" 'trigger="manual" prompts="2"'
-t_eq     "marker cleared once delivered" "$(state compaction)" "0"
-out=$(jq -nc '{session_id:"test-sess",hook_event_name:"SessionStart",source:"resume"}' | "$D/ts-session-start.zsh")
-t_absent "a later start carries nothing" "$(ctx_of "$out")" 'compaction'
-
-print -r -- "=== an undelivered marker rides the next turn stamp instead ==="
-jq -nc --arg t "$TR" '{session_id:"test-sess",transcript_path:$t,hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh" > /dev/null
-c=$(ctx_of "$(print -r -- "$PROMPT" | "$D/ts-turn.zsh")")
-t_match "turn stamp carries the marker" "$c" '<compaction covered_from="'
-t_eq    "trigger reads from .trigger"   "$(attr trigger "$c")" "auto"
-t_eq    "marker cleared once delivered" "$(state compaction)" "0"
 
 print -r -- "=== the model must never be sent a stamp it cannot parse ==="
 # Every attribute is quoted, so a stray quote from a payload would split the
-# tag. The event name is the one field taken from stdin and echoed back.
-# The pre-hook runs first so the call is timed and the gate lets the stamp
-# through: an assertion about quoting is worth nothing against an empty stamp.
-H='{"session_id":"te\"st","tool_use_id":"a\"b","hook_event_name":"Post\"Evil"}'
-print -r -- "$H" | "$D/ts-tool-pre.zsh"
-out=$(print -r -- "$H" | "$D/ts-tool-post.zsh")
-t_json   "hostile payload stays json"   "$out"
-t_match  "and is stamped at all"        "$(ctx_of "$out")" '<time end="'
-t_eq     "the event name is echoed back" "$(evt_of "$out")" 'Post"Evil' 
-t_absent "no quote leaks into the tag"  "$(ctx_of "$out")" '=""[^ /]'
+# tag. error is the field taken from the transcript and echoed back.
+mk_tx "$TX" "$P_FIRST" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:05:00.000Z","isApiErrorMessage":true,"error":"ev\"il","message":{"content":"x"}}'
+t_absent "no quote leaks into the tag"  "$(turn_ctx)" '=""[^ /]'
 
-print -r -- "=== malformed stdin must not break the turn ==="
-out=$(print -r -- 'not json' | "$D/ts-tool-post.zsh"); rc=$?
-t_eq            "exits clean"           "$rc" "0"
-t_quiet_or_json "and says nothing it cannot say well" "$out"
+print -r -- "=== malformed input must not break the turn ==="
+out=$(print -r -- 'not json' | "$D/ts-turn.zsh"); rc=$?
+t_eq   "exits clean"                    "$rc" "0"
+t_json "still emits valid json"         "$out"
+out=$(jq -nc '{session_id:"t",transcript_path:"/nope/missing.jsonl"}' | "$D/ts-turn.zsh"); rc=$?
+t_eq   "a missing transcript exits clean" "$rc" "0"
+t_match "and still stamps the time"     "$(ctx_of "$out")" '<time now="'
 
 print -r -- "=== a missing transcript is not an error ==="
-out=$(jq -nc '{session_id:"test-sess",transcript_path:"/nope/missing.jsonl",hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh"); rc=$?
+out=$(jq -nc '{session_id:"t",transcript_path:"/nope/missing.jsonl",hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh"); rc=$?
 t_eq "precompact exits clean"           "$rc" "0"
 
 print -r -- "=== queries read the transcript and never write to it ==="

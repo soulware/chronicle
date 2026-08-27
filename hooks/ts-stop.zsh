@@ -1,6 +1,7 @@
 #!/bin/zsh
-# Stop: close the turn in the scrollback, and leave the mark that lets the next
-# turn stamp separate the model's work from the user's pause.
+# Stop: close the turn in the scrollback. Nothing is left behind for anyone
+# else to read: Claude Code writes a turn_duration record at the end of every
+# turn, and the next turn stamp reads the stop time and the duration from there.
 #
 # The duration of the turn is not reported here. Claude Code's own
 # showTurnDuration setting defaults to on and already draws a "Cooked for Nm Ns"
@@ -14,22 +15,14 @@ emulate -L zsh
 source "${0:A:h}/ts-common.zsh"
 
 payload=$(cat)
-session=$(print -r -- "$payload" | jq -r '.session_id // "unknown"' 2>/dev/null)
-session=${session//[^A-Za-z0-9_-]/_}
+tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
 
-dir="${TS_STATE_DIR}/${session}"
-now=$EPOCHREALTIME
 msg="$(ts_now_iso)"
-
-if [[ -f "$dir/start" ]]; then
-  start=$(<"$dir/start")
-  [[ -n "$start" ]] && msg+="  ·  $(ts_fmt_dur $((now - start))) into session"
+if [[ -r "$tp" ]]; then
+  first=$(jq -r -s 'first(.[] | select(.timestamp) | .timestamp) // empty' "$tp" 2>/dev/null)
+  start=$(ts_iso_to_epoch "$first")
+  [[ -n "$start" ]] && msg+="  ·  $(ts_fmt_dur $((EPOCHSECONDS - start))) into session"
 fi
-
-# Stop takes additionalContext, but its meaning there is feedback the model is
-# expected to act on, which keeps the turn open. The time is left in state for
-# the next turn stamp to report instead.
-[[ -d "$dir" ]] && print -r -- $now > "$dir/stop"
 
 jq -nc --arg m "$msg" '{systemMessage: $m}'
 exit 0

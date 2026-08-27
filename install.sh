@@ -26,6 +26,12 @@ source "$SRC/ts-manifest.zsh"
 # back to this directory, so only the entry points need linking.
 mkdir -p "$H"
 chmod +x "$SRC"/ts-*.zsh
+# A script dropped from the manifest leaves a symlink behind that now dangles,
+# and a dangling hook is an error on every tool call rather than a silent no-op.
+for old in "$H"/ts-*.zsh(N); do
+  [[ -L "$old" && ! -e "$old" ]] && rm -f "$old"
+done
+
 for s in ${(f)"$(ts_scripts)"}; do
   ln -sf "$SRC/$s.zsh" "$H/$s.zsh"
 done

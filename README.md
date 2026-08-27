@@ -15,8 +15,9 @@ fail or when it stopped failing.
 
 ## What it does
 
-Two stamps, both appended to the transcript rather than placed in the system
-prompt. Minute-precision time in the system prompt would invalidate the prompt
+Two stamps reach the model and three lines only reach the scrollback. Both
+stamps are appended to the transcript rather than placed in the system prompt,
+because minute-precision time in the system prompt would invalidate the prompt
 cache prefix on every turn.
 
 `UserPromptSubmit` stamps the turn:
@@ -27,98 +28,66 @@ cache prefix on every turn.
       last_turn_dur="2m18s" since_last_stop="1m54s"/>
 ```
 
-`PostToolUse` stamps a tool result that cost something:
+Every number in it is read out of the transcript. Claude Code writes an
+ISO-8601 timestamp with milliseconds on every record, a `turn_duration` record
+at the end of each turn, an `isApiErrorMessage` record when a turn dies, and a
+`compact_boundary` record at a seam. `last_turn_dur` is Claude Code's own
+measurement rather than one of ours.
 
-```
-<time end="2026-08-26T09:43:42Z" dur="2.8s" exec="0.4s" wait="2.4s"/>
-```
-
-Most calls get no stamp at all. `TS_TOOL_CTX_MIN` sets the seconds a call must
-reach to be worth telling the model about, and defaults to 5. A block that
-appears on every call and says nothing almost every time teaches the reader to
-skip the shape, and the rare informative one goes with it. Gated, the presence
-of a stamp is itself the signal: a `cat` that took 0.1s says nothing, and what
-survives is worth reading.
-
-The gate reads `exec` rather than `dur`, so a fast command behind a slow
-permission prompt is not filed as slow work. Where the payload carries no
-`duration_ms` there is nothing to separate and the whole span is measured
-instead.
-
-`wait` has its own gate, `TS_TOOL_WAIT_MIN`, defaulting to 60. The two bands do
-not line up: five seconds of execution is a slow command, five seconds of wait
-is a permission prompt answered by someone sitting there. The only wait worth
-reporting is one long enough to mean nobody is at the keyboard. `wait` is still
-*reported* from a second, which is what separates a rejection from a timeout on
-a failure — the gate decides whether to speak, the second threshold decides
-what to say.
-
-`PostToolUseFailure` stamps a call that failed, marking the outcome and ignoring
-both gates, on the grounds that a failure is always worth seeing:
-
-```
-<time end="2026-08-26T09:43:42Z" outcome="failed" dur="4m12s" exec="0.1s" wait="4m11s"/>
-```
-
-The split matters most here, because a rejection and a timeout need opposite
-responses and look alike in `dur` alone. A rejection is wait with no execution
-behind it and should not be retried. A timeout is execution that ran out of
-time and should be.
-
-The exemption covers less than it sounds like. `PostToolUseFailure` fires on
-the tool call failing, and the Bash tool runs without `pipefail`, so
-`cargo test | tail -50` exits 0 on a failing suite and is stamped, if at all,
-as an ordinary call. Piping to bound the output is common precisely on the
-commands whose failure matters most. So an absent `outcome="failed"` is not
-evidence that anything succeeded, and the stamps say nothing about the result
-of a call, only about what it cost. What did or did not pass is in the tool
-result, which the model is already reading.
-
-`Stop` closes the turn in the scrollback and records when the model stopped.
-It takes `additionalContext`, but the meaning there is feedback the model is
-expected to act on, which holds the turn open, so the time goes to state and
-the next turn stamp reports it as `last_turn_dur` and `since_last_stop`.
-
-Its scrollback line does not report how long the turn took. Claude Code's own
-`showTurnDuration` setting defaults to on and already draws that after every
-turn, so the line carries only what the built-in one does not: the absolute
-time, and how far into the session the turn ended.
-
-Those two matter because `since_last_turn` holds the model's own work and the
-user's pause as one number. Split, `since_last_stop` is the user's gap alone,
+Those deltas matter because the gap between turns holds the model's work and
+the user's pause as one number. Split, `since_last_stop` is the user's alone,
 which is what says whether anyone is at the keyboard.
 
-`StopFailure` fires when a turn ends on an API error, where `Stop` stays silent.
-It renders nothing itself, so it leaves a note that the next turn stamp reports
-and clears:
+A turn that died on an API error is named once and then drops out, because the
+next completed turn writes a `turn_duration` after it:
 
 ```
 <time now="..." session_elapsed="..." previous_turn_failed="overloaded_error"/>
 ```
 
-`SessionStart` opens the session and names the commit doing the stamping:
+`SessionStart` opens the session, names the commit doing the stamping, and says
+once that the transcript can be queried:
 
 ```
 <time now="2026-08-26T09:44:31Z" session_source="resume" chronicle="03d949b"/>
+<transcript path="/Users/…/<session>.jsonl" query="…/ts-query.zsh">How long a
+command took, how often it has been run, whether it passed last time, and when
+a file was last changed are all answerable from here, including for turns that
+have since been compacted away.</transcript>
 ```
 
-Hooks installed mid-session leave the earlier calls unstamped, which reads the
-same as a tool the hooks skip. The version marker separates the two.
+The pointer is here rather than on every turn because it is a standing fact
+about the session, and repeating it would teach the reader to skip it.
 
 Every stamp is UTC and carries its date, so a fragment reads the same in an
 excerpt, across midnight, or on the far side of a compaction that took the
 anchoring turn stamp with it. Deltas are precomputed because subtracting ISO
 timestamps in-context is error-prone.
 
-`dur` is the whole time a call was outstanding, `exec` is the payload's own
-execution time, and `wait` is the difference: queuing and approval, outstanding
-but not running. A large `wait` is a presence signal rather than a slow command.
-It is precomputed for the same reason the turn deltas are, and appears once it
-reaches a second, below which there is nothing to say.
+## What it stopped doing
 
-Interleaving stamps between tool results is cache-safe. The cache breaks on
-rewriting earlier content, not on appending between it, and each stamp is
-written once and never revised.
+Chronicle used to stamp every tool call. `PreToolUse` recorded a start time,
+`PostToolUse` reported `end`, `dur`, `exec` and `wait`, and three thresholds
+decided which of those were worth saying.
+
+All but one of those numbers is in the transcript already, at better precision:
+`end` is the `tool_result` record's timestamp, `dur` is the gap between the
+`tool_use` and `tool_result` records, and pass or fail is `is_error`. Only
+`exec`, the tool's own execution time, appears nowhere.
+
+What kept the per-call hooks alive was not the data but the timing. The record
+of a call is written *after* the hook fires, so nothing can report a call's cost
+while it is still the current call. That mattered for exactly one signal: a long
+permission wait means nobody is at the keyboard.
+
+Learning that a turn late is soon enough, since nothing acts on it in real time.
+So `PreToolUse`, `PostToolUse` and `StopFailure` are gone, and with them the
+state directory, the daily sweep, and `TS_TOOL_MIN`, `TS_TOOL_CTX_MIN` and
+`TS_TOOL_WAIT_MIN`. Nine hooks became five, two of which reach the model.
+
+Chronicle keeps no state at all. Every baton it used to write — the session
+start, the last turn, the stop mark, the API-error note, the compaction marker —
+stood in for a fact the record already holds, or holds a moment later.
 
 ## Scrollback
 
@@ -133,19 +102,15 @@ by eye:
 ```
 
 Claude Code prefixes each of these with the event and tool, as
-`PostToolUse:Bash says:`, and that prefix is its own rendering rather than part
+`Stop says:`, and that prefix is its own rendering rather than part
 of the message.
 
 These carry the full date where the model's tool stamps carry a clock time, on
 the grounds that a person scanning back through a week of scrollback wants the
 date and the model has a dated turn stamp nearby already.
 
-`TS_TOOL_MIN` sets the seconds a call must reach before it appears here, and is
-a separate gate from `TS_TOOL_CTX_MIN` above because the two readers pay
-differently. A line here costs a person a glance, so it defaults to 0 and every
-call shows. Raising it to 5 limits the scrollback to slow calls and leaves the
-model's stamps untouched; lowering `TS_TOOL_CTX_MIN` to 0 restores a stamp on
-every call for the model and leaves the scrollback untouched.
+Nothing reaches the scrollback per tool call any more. `Stop` closes the turn,
+`PreCompact` and `PostCompact` mark a seam, and that is all.
 
 ## Compaction
 
@@ -184,26 +149,13 @@ boundary the model can see is what makes it worth going to look.
 
 ## Measured cost
 
-- 35ms per pre+post pair, so about 18s across a 500-call session.
-- ~16 tokens per tool stamp, ~35 per turn stamp. 8k was the figure when all 500
-  calls carried one; under the default gate only the calls that cost something
-  do, so the total tracks how much of a session was spent waiting rather than
-  how many calls it made.
-
-## Correlation
-
-`PreToolUse` records a start time under the call's `tool_use_id`; `PostToolUse`
-reads it back and deletes it. Both events carry that id, so each call is matched
-exactly and concurrent calls with identical input stay distinct. `PreToolUse`
-emits nothing and therefore costs no context.
-
-A `PostToolUse` with no matching start has no duration to gate on and stamps
-nothing, so installing mid-session is safe and leaves the calls already in
-flight looking like the cheap ones. Malformed stdin exits 0 the same way. A hook
-with nothing to say prints nothing rather than an empty stamp.
-
-State lives in `~/.claude/hooks/state/<session_id>/`, overridable with
-`TS_STATE_DIR`. Tool entries older than a day are swept on each turn.
+- ~11ms for one `jq` pass over a 682K transcript, once per turn. The per-call
+  pair this replaced cost 35ms and ran on every tool call, so a 500-call
+  session spent about 18s stopwatching and now spends about 0.2s reading.
+- ~35 tokens per turn stamp, and nothing per tool call. Over a session of 20
+  turns that is under a thousand tokens, against roughly 8k when every call
+  carried a stamp.
+- The `SessionStart` pointer costs about 60 tokens, once.
 
 ## Querying the record
 
@@ -231,7 +183,7 @@ no normalisation, no coarseness to tune. `Bash` carries one free-form string,
 which is why every other query here has to guess.
 
 ```
-2 operations on "ts-tool-post.zsh"
+2 operations on "ts-turn.zsh"
   2026-08-27T09:35:59Z  Write
   2026-08-27T09:42:18Z  Edit    +17 -1     modified by user
 ```
@@ -298,8 +250,10 @@ from the hooks and are available for calls made before chronicle was installed.
 Measured against chronicle's own stamps on the same calls, the two agree:
 13.1s, 13.9s and 33.1s read back as 13.1s, 13.9s and 33.2s.
 
-`exec` is the exception. It arrives in the `PostToolUse` payload and is written
-nowhere in the transcript, which is why that hook still has a job. See
+`exec`, a tool's own execution time, is the exception: it appears nowhere in the
+transcript. It used to arrive in the `PostToolUse` payload, and giving that hook
+up gives it up too. `dur` covers the whole time a call was outstanding, so what
+is lost is the split between running and waiting. See
 [issue #1](https://github.com/soulware/chronicle/issues/1).
 
 Subagents keep their own transcript, one file per agent, at
@@ -311,7 +265,6 @@ Chronicle's hooks do not fire inside a subagent, so those transcripts carry no
 stamps at all. Their durations come from envelope timestamps, which is what
 this reads anyway, so a subagent's work is queryable even though it was never
 stamped.
-
 ## Install
 
 ```
@@ -334,8 +287,10 @@ second copy, and leaves every other hook alone.
 the only place that list is written down. `install.sh` and `uninstall.sh` derive
 what to link, what to remove, and how to recognise chronicle's own settings
 entries from it, so adding a hook means adding a line there and nothing else.
-The pairing is not one to one, which is why it cannot be read off the
-filenames: `ts-tool-post` serves both `PostToolUse` and `PostToolUseFailure`.
+The pairing is one to one now, but the manifest stays the single source: the
+strip pattern that recognises chronicle's entries in `settings.json` is derived
+from the naming convention rather than the list, so a script dropped from the
+manifest is still removed on the next install.
 
 `install.sh` symlinks those entry points into `~/.claude/hooks/`, so editing
 this repo changes hook behaviour on the next fire. `ts-common.zsh` is reached
@@ -379,47 +334,32 @@ underneath it.
 
 ## Measured behaviour
 
-Confirmed against a live install on 2026-08-26.
+Confirmed against a live install, 2026-08-26 and 2026-08-27.
 
-- `PostToolUse` `additionalContext` renders attached to its own tool result, so
-  each stamp stays anchored to the call it describes.
-- Both hook payloads carry `tool_use_id`, which is what the matching keys on.
-- Hooks fire across every project on the machine, with each session's state in
-  its own directory.
-- A tool call that fails goes to `PostToolUseFailure` rather than `PostToolUse`,
-  which is why both events run the same script. A failure carries its duration
-  and clears its start entry like any other call.
-- Subagent tool calls fire the hooks and carry stamps, under the parent's
-  `session_id`, so parent and subagent share one state directory. Keying on
-  `tool_use_id` keeps their entries distinct.
-- A background tool call is stamped when it is dispatched, so `dur` covers the
-  handoff. A `sleep 12` returned `dur="0.0s"`. The same applies to an async
-  `Agent` call, stamped at launch rather than at completion.
-- The completion notification for a background task carries no time of its own.
-  The following turn stamp is what bounds when it landed.
 - `PostCompact` accepts `systemMessage` and rejects `hookSpecificOutput`, which
-  it reports as `(root): Invalid input`. `PostToolUseFailure` takes the same
-  shape and is accepted, so the schema quoted in that error is abbreviated
-  rather than exhaustive.
-- The compaction payload names the trigger `trigger`.
+  it reports as `(root): Invalid input`, so the boundary reaches the model from
+  the next turn stamp instead.
 - `Stop` reaches the model through `additionalContext`, but the field means
-  feedback to act on and keeps the turn open, so a duration cannot ride it.
-- `SessionStart` takes `additionalContext`, so the compaction marker reaches
-  the model there rather than a turn later. Confirmed on `source="resume"` and
-  on `source="compact"`, which is the seam the marker is written for.
-- The span in the marker is longer than the span `PreCompact` reports, because
-  the marker runs from `covered_from` to the moment a later event claims it.
-  The difference is the time the compaction itself takes.
-- A resume keeps the `session_id`, so the state directory carries over and a
+  feedback to act on and keeps the turn open, so nothing rides it.
+- `SessionStart` takes `additionalContext`, on `source="resume"` and on
+  `source="compact"`.
+- A resume keeps the `session_id` and appends to the same transcript, so a
   resumed session goes on counting from its original start.
 - A compaction appends a second `compact_boundary` record and leaves every
   earlier record in place, so the transcript holds each seam in order.
-
-`dur` spans the pre-hook to the post-hook, so it covers the whole time the call
-was outstanding: queuing and permission waits included. One `sed` measured 45ms
-of execution against 3.7s of `dur`, the difference being a permission prompt.
-Both numbers are emitted, `dur` and `exec`, so the wait is readable as its own
-quantity.
+- A subagent keeps its own transcript, one file per agent, at
+  `<project>/<session-id>/subagents/agent-<id>.jsonl`, with `isSidechain` set on
+  every record. Chronicle's hooks do not fire inside one, so those transcripts
+  carry no stamps — but their envelope timestamps are intact, so `ts-query`
+  reads them normally. An earlier note here claimed subagent calls fired the
+  hooks and carried stamps under the parent's `session_id`; a probe agent on
+  2026-08-27 showed otherwise, and none of its tool calls reached the parent
+  transcript in any form.
+- A background tool call is dispatched and returns immediately, so a turn stamp
+  bounds when it landed rather than anything finer. The completion notification
+  carries no time of its own.
+- The `Bash` tool runs without `pipefail`, so `cargo test | tail -50` exits 0 on
+  a failing suite and is recorded with `is_error` false.
 
 ### Against Claude Code's own clock
 
@@ -437,8 +377,10 @@ local time, so a commit and the stamp for the same moment read an hour apart
 here without either being wrong. The `Z` is what settles it.
 
 `turn_duration` records in the transcript carry Claude Code's own `durationMs`
-for each turn, and it does not measure what `last_turn_dur` measures. Over one
-session:
+for each turn. `last_turn_dur` now reports that number directly rather than
+computing its own, so the two agree by construction. The comparison below is
+what established that they measure different things, and is kept because the
+difference is now reported rather than hidden. Over one session:
 
 ```
 turn ends        chronicle   claude code   difference
@@ -450,11 +392,13 @@ turn ends        chronicle   claude code   difference
 ```
 
 Four of the five agree inside a second. The turn that does not is the one
-holding an `AskUserQuestion`, whose own stamp reads `dur="31.0s"`, which is the
-gap. Claude Code discounts the time a turn spends blocked on the user;
-`last_turn_dur` is wall clock from prompt to stop and counts it. Neither is
-wrong, and the distinction is the one `dur` and `exec` already draw for a single
-call, resolved the other way one level up.
+holding an `AskUserQuestion`: Claude Code discounts the time a turn spends
+blocked on the user, and wall clock from prompt to stop counts it.
+
+Neither is wrong, and the gap has a name now. `last_turn_blocked` reports it
+whenever it reaches a second, because it falls inside the turn and so
+`since_last_stop` does not cover it either. Reading `durationMs` without that
+would have quietly dropped 31 seconds of a user sitting on a question.
 
 Those records also make the case for the whole thing, since they sit on disk
 carrying exactly the duration the model cannot see.

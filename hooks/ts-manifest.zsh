@@ -6,19 +6,16 @@
 # pattern that recognises chronicle's own entries in settings.json. Adding a
 # hook means adding a line here and nothing else.
 #
-# The mapping is not one to one in either direction, which is why it cannot be
-# read off the filenames. A failed tool call carries the same shape as a
-# successful one, so ts-tool-post serves both PostToolUse and PostToolUseFailure.
+# Two of these reach the model and three only draw a line in the scrollback.
+# That split is the whole design: what the model needs is read back out of the
+# transcript, which already records it, and only what the transcript cannot
+# answer in time gets pushed.
 TS_HOOKS=(
   UserPromptSubmit:ts-turn
-  PreToolUse:ts-tool-pre
-  PostToolUse:ts-tool-post
-  PostToolUseFailure:ts-tool-post
+  SessionStart:ts-session-start
   Stop:ts-stop
-  StopFailure:ts-stop-fail
   PreCompact:ts-precompact
   PostCompact:ts-postcompact
-  SessionStart:ts-session-start
 )
 
 # The distinct scripts, in the order they first appear. These are the entry
@@ -34,8 +31,10 @@ ts_events() { print -l -- ${TS_HOOKS[@]%%:*} }
 # Matches a settings.json command path that points at one of our scripts.
 # Passed to jq as an argument rather than spliced into the program, so the
 # script names never have to survive a second round of quoting.
-ts_strip_re() {
-  local -a s
-  s=( ${(f)"$(ts_scripts)"} )
-  print -r -- "/(${(j:|:)s})\\.zsh\$"
-}
+#
+# Deliberately the naming convention rather than the list above. Deriving it
+# from the manifest meant an entry for a script that had since been deleted
+# matched nothing, survived every reinstall, and left Claude Code invoking a
+# path that no longer existed. A strip pattern has to recognise what chronicle
+# used to install, not only what it installs now.
+ts_strip_re() { print -r -- "/ts-[a-z0-9-]+\\.zsh\$" }
