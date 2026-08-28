@@ -13,13 +13,9 @@
 # error into a visible one: too short over-matches and costs a rerun, too long
 # returns nothing at all and says so.
 #
-#   ts-query intents [words] [--within 1h]    what the work was said to be about
-#   ts-query touched <path>                   every read and write of a file
-#   ts-query recent <prefix> [--within 30m]   how often, and when
-#   ts-query last <prefix>                    outcome and age of the last run
-#   ts-query transitions <prefix>             where pass and fail changed places
-#   ts-query turns [--within 2h]              each turn, and where its time went
-#   ts-query elapsed                          session, last turn, last stop
+# What the queries are and what each answers is written down once, in usage()
+# below, which is what --help prints. A second copy in this header is the one
+# that would rot, because nothing fails when a comment goes stale.
 #
 # `touched` is the reliable one and the rest are the approximate ones. Edit,
 # Write and Read carry a file_path, which is an absolute path and therefore an
@@ -55,6 +51,47 @@ setopt pipefail extendedglob
 source "${0:A:h}/ts-common.zsh"
 
 die() { print -r -- "ts-query: $1" >&2; exit 2 }
+
+# The single copy of what this tool answers. --help prints it to stdout and
+# succeeds; a bare invocation prints it to stderr and fails, because one is a
+# question and the other is a mistake.
+#
+# The two silences are here rather than in the README because they are not facts
+# about the repository, they are facts about how to read this tool's output, and
+# the reader who needs them is the one holding the output.
+usage() {
+  cat <<'USAGE'
+usage: ts-query <query> [arg] [--within 30m] [--contains] [--include-meta]
+                [--transcript PATH]
+
+  intents [words]       what the work was said to be about
+  touched <path>        every read and write of a file, with +/- line counts
+  recent <prefix>       how often a command ran, and when
+  last <prefix>         outcome and age of the last run
+  transitions <prefix>  where pass and fail changed places
+  turns                 each turn, and where its time went
+  elapsed               session, last turn, last stop
+
+  --within 30m       only what happened since then (s, m, h, d, or bare seconds)
+  --contains         match anywhere in the command, not just at its start
+  --include-meta     include this tool's own calls, normally excluded
+  --transcript PATH  read another transcript; default is the newest for $PWD
+
+Reads the transcript on disk, so it answers for turns that have since been
+compacted away. Nothing here writes or keeps state.
+
+Two silences to read carefully:
+
+  Only `touched` has an exact key. Edit, Write and Read record an absolute
+  file_path; Bash records one free-form string, so every command query is a
+  prefix guess. Use --contains for work buried inside a compound command:
+  `python3 build.py && cargo test` does not start with `cargo test`.
+
+  An absent failure is not evidence of success. The Bash tool runs without
+  pipefail, so `cargo test | tail -50` exits 0 on a failing suite and is
+  recorded here as a pass.
+USAGE
+}
 
 # Claude Code slugs the project directory by replacing every character outside
 # [A-Za-z0-9] with a dash. Deriving it here rather than taking it on faith
@@ -224,13 +261,14 @@ while (( $# )); do
     --contains)   contains=1; shift ;;
     --include-meta) include_meta=1; shift ;;
     --within)     within=$2; shift 2 ;;
+    -h|--help)    usage; exit 0 ;;
     *)            rest+=("$1"); shift ;;
   esac
 done
 set -- "${rest[@]}"
 
 cmd=${1:-}
-[[ -n "$cmd" ]] || die "usage: ts-query touched|intents|recent|last|transitions|turns|elapsed [arg] [--within 30m] [--contains] [--include-meta] [--transcript PATH]"
+if [[ -z "$cmd" ]]; then usage >&2; exit 2; fi
 
 if [[ -z "$transcript" ]]; then
   transcript=$(default_transcript) \
