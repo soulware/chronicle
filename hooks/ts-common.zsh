@@ -56,8 +56,11 @@ ts_emit() {
 # last_prompt is deliberately the last prompt at or before the last
 # turn_duration: by the time UserPromptSubmit fires the current prompt may
 # already be on disk, and counting it would report a gap of zero.
-TS_TX_JQ='
-  def ts: .timestamp // empty;
+# The span arithmetic the turn stamp and ts-query both need, kept in one place
+# so the two can never disagree about what counts as machine time. A subagent
+# excluded from the stamp but counted by the query would have them answering the
+# same question two different ways, which is worse than either answer.
+TS_JQ_SPANS='
   # Envelope timestamps carry milliseconds, which fromdateiso8601 will not
   # parse, so the fraction comes off and is added back.
   def ep: (.[0:19] + "Z" | fromdateiso8601)
@@ -73,6 +76,16 @@ TS_TX_JQ='
                else . + [$s] end)
            | map(.[1] - .[0]) | add // 0;
   def secs: (. * 10 | round / 10 | tostring);
+  # An Agent call is another model generating and AskUserQuestion is the user
+  # deciding. Neither is the machine working, and the second is already named by
+  # last_turn_blocked.
+  def is_machine: .name != "Agent" and .name != "AskUserQuestion";
+  def is_agent:   .name == "Agent";
+'
+
+TS_TX_JQ='
+  def ts: .timestamp // empty;
+'"$TS_JQ_SPANS"'
   [ .[] | select(.timestamp) ] as $all
   | ($all | map(select(.subtype == "turn_duration")) | last) as $lastturn
   | (($lastturn | .timestamp) // "") as $stop
@@ -117,11 +130,9 @@ TS_TX_JQ='
     # transcript records when a call started and when it returned, with nothing
     # marking the wait for approval in between.
     [ "tool_time",
-      ([ $calls[]
-         | select(.name != "Agent" and .name != "AskUserQuestion")
-         | .span ] | merge | secs) ],
+      ([ $calls[] | select(is_machine) | .span ] | merge | secs) ],
     [ "subagent_time",
-      ([ $calls[] | select(.name == "Agent") | .span ] | merge | secs) ],
+      ([ $calls[] | select(is_agent) | .span ] | merge | secs) ],
     [ "api_error",
       (($all | map(select(.isApiErrorMessage == true))
              | map(select($stop == "" or (.timestamp > $stop))) | last | .error) // "") ],

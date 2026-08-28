@@ -297,6 +297,66 @@ mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" \
   "$P_TWO" "$P_TURN2"
 t_absent "the turn after says nothing"  "$(turn_ctx)" 'previous_turn_failed'
 
+print -r -- "=== turns are delimited by the record, not by the prompts ==="
+# The one query whose unit is the turn. Its window, merge and exclusions come
+# from TS_JQ_SPANS, so the number it prints for a turn is the number the stamp
+# printed for that turn while it was the last one.
+TQ="$TS_STATE_DIR/turns-transcript.jsonl"
+q_turns() { zsh "$D/ts-query.zsh" turns --transcript "$TQ" "$@" 2>&1 }
+mk_tx "$TQ" "$P_ONE" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:10.000Z","message":{"content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"cargo test"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:40.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"u1","is_error":false}]}}' \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:45.000Z","message":{"content":[{"type":"tool_use","id":"u2","name":"Agent","input":{"subagent_type":"Explore"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:02:45.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"u2","is_error":false}]}}' \
+  "$P_TURN1"
+out=$(q_turns)
+t_eq    "one turn is listed"              "${out%%$'\n'*}" "1 turn"
+t_match "the machine and the subagent are separate columns" "$out" '30\.0s +1m00s'
+t_match "the prompt captions the turn"    "$out" 'first prompt'
+# A transcript that opens with the prompt must not lose it: the first window is
+# unbounded below rather than anchored to the first record, which sits exactly
+# on the bound.
+t_absent "the opening prompt is not dropped" "$out" '\(no prompt\)'
+
+# A message sent while the model is still working lands mid-turn. Counting
+# prompts would split one turn in two and report the same durationMs twice.
+mk_tx "$TQ" "$P_ONE" \
+  '{"type":"user","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":"sent while it was working"}}' \
+  "$P_TURN1"
+out=$(q_turns)
+t_eq    "an interrupt does not open a turn" "${out%%$'\n'*}" "1 turn"
+t_match "and is counted where it happened" "$out" '\[\+1 mid-turn\]'
+
+# A turn still in flight has no turn_duration, on the same grounds as a call
+# with no result.
+mk_tx "$TQ" "$P_ONE"
+t_match "an unfinished turn is not listed" "$(q_turns)" 'no completed turns'
+
+# The point of sharing TS_JQ_SPANS rather than copying it. The stamp reports
+# one turn as it ends and the query reports every turn afterwards; if the two
+# ever disagreed about the same turn, one of them would be lying and there
+# would be no way to tell which.
+mk_tx "$TQ" "$P_ONE" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:10.000Z","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"a"}},{"type":"tool_use","id":"x2","name":"Bash","input":{"command":"b"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:40.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"x1","is_error":false}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:55.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"x2","is_error":false}]}}' \
+  '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"x3","name":"Agent","input":{"subagent_type":"Explore"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:02:30.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"x3","is_error":false}]}}' \
+  "$P_TURN1"
+stamp=$(ctx_of "$(jq -nc --arg t "$TQ" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/ts-turn.zsh")")
+qrow=$(q_turns | tail -1)
+t_eq "the query agrees with the stamp on tool time" \
+  "$(print -r -- "$qrow" | awk '{print $3}')" "$(attr last_turn_tool_time "$stamp")"
+t_eq "and on delegated time" \
+  "$(print -r -- "$qrow" | awk '{print $4}')" "$(attr last_turn_subagent_time "$stamp")"
+
+# A slash command closes a turn without anyone typing at the model. Naming it
+# beats a blank row, which reads as broken output.
+mk_tx "$TQ" \
+  '{"type":"system","subtype":"local_command","timestamp":"2026-08-27T09:01:00.000Z"}' \
+  "$P_TURN1"
+t_match "a prompt-less turn says what it was" "$(q_turns)" '\(local_command\)'
+
 print -r -- "=== a compaction boundary is found in the record and reported once ==="
 mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" \
   '{"type":"system","subtype":"compact_boundary","timestamp":"2026-08-27T09:05:00.000Z"}' \

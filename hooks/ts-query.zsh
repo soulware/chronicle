@@ -18,6 +18,7 @@
 #   ts-query recent <prefix> [--within 30m]   how often, and when
 #   ts-query last <prefix>                    outcome and age of the last run
 #   ts-query transitions <prefix>             where pass and fail changed places
+#   ts-query turns [--within 2h]              each turn, and where its time went
 #   ts-query elapsed                          session, last turn, last stop
 #
 # `touched` is the reliable one and the rest are the approximate ones. Edit,
@@ -48,6 +49,10 @@
 emulate -L zsh
 zmodload zsh/datetime
 setopt pipefail extendedglob
+
+# For TS_JQ_SPANS. The turn stamp and this tool have to agree about what counts
+# as machine time, so the arithmetic is sourced rather than copied.
+source "${0:A:h}/ts-common.zsh"
 
 die() { print -r -- "ts-query: $1" >&2; exit 2 }
 
@@ -152,6 +157,65 @@ JQ_FILES='
           ] | @tsv)[]
 '
 
+# One TSV row per completed turn. Turns are delimited by turn_duration records
+# rather than by prompts, because a prompt does not reliably start one: a
+# message sent while the model is still working lands mid-turn, and counting
+# prompts would split one turn into two and report the same durationMs twice.
+# Extra prompts inside the window are counted and reported as such.
+#
+# A turn still in flight has no turn_duration and is left out, on the same
+# grounds as a tool call with no result.
+JQ_TURNS=$TS_JQ_SPANS'
+  [ .[] | select(type == "object" and .timestamp) ] as $all
+  | (map(select((.message.content | type) == "array")
+         | .timestamp as $t
+         | .message.content[]
+         | select(.type == "tool_result")
+         | {id: .tool_use_id, end: $t})
+     | INDEX(.id)) as $ends
+  | [ $all[] | select(.subtype == "turn_duration") ] as $turns
+  | [ $all[] | select(.type == "user"
+                      and (.message.content | type) == "string") ] as $prompts
+  | range($turns | length) as $i
+  | $turns[$i] as $tu
+  # Unbounded below for the first turn rather than anchored to the first record.
+  # Anchoring drops the opening prompt whenever the transcript begins with it,
+  # since the bound is exclusive and the prompt sits exactly on it.
+  | (if $i == 0 then "" else $turns[$i - 1].timestamp end) as $from
+  | [ $prompts[]
+      | select(($from == "" or .timestamp > $from)
+               and .timestamp <= $tu.timestamp) ] as $ps
+  | [ $all[]
+      | select(.type == "assistant" and (.message.content | type) == "array")
+      | .timestamp as $t
+      | select(($from == "" or $t > $from) and $t <= $tu.timestamp)
+      | .message.content[]
+      | select(.type == "tool_use")
+      | ($ends[.id] // {}) as $e
+      | select($e.end != null)
+      | { name: .name, span: [ ($t | ep), ($e.end | ep) ] } ] as $c
+  | [ $tu.timestamp,
+      ((($tu.durationMs // 0) / 1000) | tostring),
+      ([ $c[] | select(is_machine) | .span ] | merge | secs),
+      ([ $c[] | select(is_agent)   | .span ] | merge | secs),
+      ($c | length | tostring),
+      ($ps | length | tostring),
+      # A turn with no prompt is a real boundary rather than a gap: a slash
+      # command run locally closes a turn without anyone typing at the model.
+      # Named for what it was, because a blank caption reads as a broken row.
+      (if ($ps | length) > 0
+       then (($ps | first | .message.content) | gsub("[\t\n]"; " "))
+       else ("(" + (([ $all[]
+                       | select(.type == "system"
+                                and ($from == "" or .timestamp > $from)
+                                and .timestamp <= $tu.timestamp)
+                       | .subtype ]
+                     | map(select(. != "turn_duration"))
+                     | first) // "no prompt") + ")")
+       end)
+    ] | @tsv
+'
+
 transcript=""
 typeset -a rest
 while (( $# )); do
@@ -166,7 +230,7 @@ done
 set -- "${rest[@]}"
 
 cmd=${1:-}
-[[ -n "$cmd" ]] || die "usage: ts-query touched|intents|recent|last|transitions|elapsed [arg] [--within 30m] [--contains] [--include-meta] [--transcript PATH]"
+[[ -n "$cmd" ]] || die "usage: ts-query touched|intents|recent|last|transitions|turns|elapsed [arg] [--within 30m] [--contains] [--include-meta] [--transcript PATH]"
 
 if [[ -z "$transcript" ]]; then
   transcript=$(default_transcript) \
@@ -371,6 +435,40 @@ transitions)
   fi
   print -r -- "$#hits change$( (( $#hits == 1 )) || print s ) of outcome for \"$prefix\""
   print -l -- "${hits[@]: -10}"
+  ;;
+
+turns)
+  # The one query whose unit is the turn. Everything else here is a question
+  # about calls, which is why this had to re-derive nothing: the window, the
+  # merge and the exclusions all come from TS_JQ_SPANS, the same arithmetic the
+  # stamp reports one turn at a time.
+  trows=$(jq -r "$JQ_TURNS" -s "$transcript" 2>/dev/null) \
+    || die "could not parse $transcript"
+  matched=$(print -r -- "$trows" | while IFS=$'\t' read -r ts dur tool agent calls nps caption; do
+    [[ -n "$ts" ]] || continue
+    if (( cutoff )); then
+      e=$(iso_ep "$ts"); [[ -n "$e" ]] && (( e >= cutoff )) || continue
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$dur" "$tool" "$agent" "$calls" "$nps" "$caption"
+  done)
+  if [[ -z "$matched" ]]; then
+    print -r -- "no completed turns${within:+ in the last $within}"
+    exit 1
+  fi
+  n=$(print -r -- "$matched" | wc -l | tr -d ' ')
+  print -r -- "$n turn$( (( n == 1 )) || print s )${within:+ in the last $within}"
+  # A header, unlike the other queries, because five numeric columns without one
+  # are a puzzle rather than a table.
+  printf '  %-10s %7s %7s %7s %6s  %s\n' ended turn tools agent calls prompt
+  print -r -- "$matched" | tail -20 | while IFS=$'\t' read -r ts dur tool agent calls nps caption; do
+    # A zero prints as a dash. The reader is scanning for where the time went,
+    # and a column of 0.0s is noise that hides the rows that have an answer.
+    a="-"; (( agent )) && a=$(fmt_dur $agent)
+    t="-"; (( tool ))  && t=$(fmt_dur $tool)
+    extra=""; (( nps > 1 )) && extra=" [+$((nps - 1)) mid-turn]"
+    printf '  %s  %7s %7s %7s %6s  %s\n' \
+      "${ts:11:8}Z" "$(fmt_dur $dur)" "$t" "$a" "$calls" "$(clip "$caption$extra" 52)"
+  done
   ;;
 
 elapsed)

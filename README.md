@@ -141,8 +141,38 @@ ts-query intents [words] [--within 1h]    what the work was said to be about
 ts-query recent <prefix> [--within 30m]   how often, and when
 ts-query last <prefix>                    outcome and age of the last run
 ts-query transitions <prefix>             where pass and fail changed places
+ts-query turns [--within 2h]              each turn, and where its time went
 ts-query elapsed                          span and size of the transcript
 ```
+
+`turns` is the only one whose unit is the turn. Every other query here asks
+about calls, which left the unit the stamps are built on — `last_turn_dur`,
+`last_turn_tool_time`, `last_turn_subagent_time` — as the one thing that could
+not be asked about after the fact:
+
+```
+13 turns
+  ended         turn   tools   agent  calls  prompt
+  09:33:58Z    8m41s   5m23s       -     13  yes - subagent use might be relatively…
+  09:39:40Z    51.2s    6.8s       -      4  lets commit this
+  07:32:38Z   17m36s    6.5s  15m24s     10  Can we take a step back and audit the…
+```
+
+It reads a turn the way the stamp does, because it is the same arithmetic:
+`TS_JQ_SPANS` in `ts-common.zsh` holds the timestamp parse, the span merge and
+the Agent/AskUserQuestion exclusions, and both the stamp and this query source
+it rather than copying it. A subagent excluded from one and counted by the other
+would have them answering the same question two different ways, which is worse
+than either answer alone — so a test asserts the two agree on the same turn.
+
+Turns are delimited by `turn_duration` records rather than by prompts. A prompt
+does not reliably open one: a message sent while the model is still working
+lands mid-turn, and counting prompts would split a single turn in two and report
+its `durationMs` twice. Extra prompts inside a window are counted instead, shown
+as `[+1 mid-turn]`. A turn still in flight has no `turn_duration` and is left
+out, on the same grounds as a call with no result. A turn nobody prompted — a
+slash command run locally — is named `(local_command)` rather than left blank,
+since a blank row reads as broken output rather than as a fact.
 
 `touched` is the reliable one and the rest are the approximate ones, because the
 tools differ in what they record. `Edit`, `Write` and `Read` carry a
