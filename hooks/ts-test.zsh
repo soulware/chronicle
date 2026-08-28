@@ -183,6 +183,90 @@ t_eq "and the block is named separately"     "$(attr last_turn_blocked "$c")" "2
 mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
 t_absent "an unblocked turn says nothing"    "$(turn_ctx)" 'last_turn_blocked'
 
+print -r -- "=== the machine's half of the turn is separated from the model's ==="
+# durationMs covers the model generating and the machine working as one number,
+# and nothing the model can see splits them: a tool result carries no timing.
+TC1='{"type":"assistant","timestamp":"2026-08-27T09:01:10.000Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]}}'
+TR1='{"type":"user","timestamp":"2026-08-27T09:01:40.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false}]}}'
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$TC1" "$TR1" "$P_TURN1"
+t_eq "tool time is measured off the call" "$(attr last_turn_tool_time "$(turn_ctx)")" "30.0s"
+
+# Calls issued in one message run at the same time. Summing them would report
+# 70s of machine time inside a turn that only spent 40s waiting, and a share of
+# the turn above 100%, so overlapping spans are merged.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:10.000Z","message":{"content":[{"type":"tool_use","id":"p1","name":"Bash","input":{"command":"a"}},{"type":"tool_use","id":"p2","name":"Bash","input":{"command":"b"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:40.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"p1","is_error":false}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:50.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"p2","is_error":false}]}}' \
+  "$P_TURN1"
+t_eq "parallel calls are counted once" "$(attr last_turn_tool_time "$(turn_ctx)")" "40.0s"
+
+# The window is the last turn, not the session, so an earlier turn's work does
+# not accumulate into this one.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$TC1" "$TR1" "$P_TURN1" "$P_TWO" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:10:10.000Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"cargo build"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:10:15.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":false}]}}' \
+  "$P_TURN2"
+t_eq "only the turn that just ended counts" "$(attr last_turn_tool_time "$(turn_ctx)")" "5.0s"
+
+# A turn that only talked has nothing to separate, and saying so on every
+# conversational turn would be noise.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
+t_absent "a turn with no tools says nothing" "$(turn_ctx)" 'last_turn_tool_time'
+
+# A call with no result is one still in flight or one the transcript never saw
+# finish. ts-query drops those rather than guess at an end, and so does this.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$TC1" "$P_TURN1"
+t_absent "an unfinished call is not guessed at" "$(turn_ctx)" 'last_turn_tool_time'
+
+# An Agent call is another model generating, not the machine working, and it is
+# the only tool whose cost runs to minutes. Folded in with the rest it would
+# report a quarter of an hour at the build for a turn that never ran a command.
+AC1='{"type":"assistant","timestamp":"2026-08-27T09:01:50.000Z","message":{"content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"subagent_type":"Explore","prompt":"look"}}]}}'
+AR1='{"type":"user","timestamp":"2026-08-27T09:02:50.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":false}]}}'
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$TC1" "$TR1" "$AC1" "$AR1" "$P_TURN1"
+c=$(turn_ctx)
+t_eq "the machine's half excludes the subagent" "$(attr last_turn_tool_time "$c")" "30.0s"
+t_eq "and delegated time is named on its own"   "$(attr last_turn_subagent_time "$c")" "1m00s"
+
+# A turn that only delegated ran no commands at all, and saying it spent tool
+# time would be the conflation this pair exists to undo.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$AC1" "$AR1" "$P_TURN1"
+c=$(turn_ctx)
+t_absent "delegating alone is not machine time" "$c" 'last_turn_tool_time'
+t_eq     "but is still reported"                "$(attr last_turn_subagent_time "$c")" "1m00s"
+
+# Subagents launched together run together, so the same merge applies.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:10.000Z","message":{"content":[{"type":"tool_use","id":"a2","name":"Agent","input":{"subagent_type":"Explore"}},{"type":"tool_use","id":"a3","name":"Agent","input":{"subagent_type":"Explore"}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:40.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a2","is_error":false}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:01:50.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a3","is_error":false}]}}' \
+  "$P_TURN1"
+t_eq "parallel subagents are counted once" "$(attr last_turn_subagent_time "$(turn_ctx)")" "40.0s"
+
+# A turn with neither says neither.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
+t_absent "no delegation, no attribute" "$(turn_ctx)" 'last_turn_subagent_time'
+
+# AskUserQuestion is neither the machine nor a delegated model: its span is the
+# user deciding. Counting it would put a pause at the keyboard into a number
+# claiming to be machine time, and would double-report it, since
+# last_turn_blocked already names exactly that time.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" "$TC1" "$TR1" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:50.000Z","message":{"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[]}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:04:10.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":false}]}}' \
+  "$P_TURN1"
+c=$(turn_ctx)
+t_eq "waiting on the user is not machine time" "$(attr last_turn_tool_time "$c")" "30.0s"
+t_absent "and is not counted as delegation"    "$c" 'last_turn_subagent_time'
+
+# A turn that only asked has no machine time at all to report.
+mk_tx "$TX" "$P_FIRST" "$P_ONE" \
+  '{"type":"assistant","timestamp":"2026-08-27T09:01:50.000Z","message":{"content":[{"type":"tool_use","id":"q2","name":"AskUserQuestion","input":{"questions":[]}}]}}' \
+  '{"type":"user","timestamp":"2026-08-27T09:04:10.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"q2","is_error":false}]}}' \
+  "$P_TURN1"
+t_absent "asking alone reports no tool time" "$(turn_ctx)" 'last_turn_tool_time'
+
 print -r -- "=== the current prompt must not be mistaken for the previous one ==="
 # By the time UserPromptSubmit fires, the prompt that triggered it may already
 # be on disk. Counting it would report a gap of zero, so the previous prompt is

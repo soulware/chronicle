@@ -68,6 +68,27 @@ if [[ -n "${F[last_stop]:-}" ]]; then
         (( blocked >= 1 )) && attrs+=" last_turn_blocked=\"$(ts_fmt_dur $blocked)\""
       fi
     fi
+    # What is left inside durationMs is the model generating and the machine
+    # working, with nothing separating them. This is the machine's half, and it
+    # is the one number here the model cannot recover from its own context: a
+    # tool result carries no timing at all. Usually it is the small half — a
+    # twelve minute turn whose commands took thirty seconds went into
+    # generation, not into the build.
+    #
+    # Silent when the turn ran no tools, since an explicit zero would appear on
+    # every conversational turn to say nothing happened.
+    if (( ${F[tool_time]:-0} )); then
+      attrs+=" last_turn_tool_time=\"$(ts_fmt_dur ${F[tool_time]})\""
+    fi
+    # Delegated work is named on its own line rather than folded into the one
+    # above. An Agent call is another model generating, and it is the only tool
+    # here whose cost runs to minutes: counted as machine time it would report a
+    # quarter of an hour at the build for a turn that never ran a command, which
+    # is the exact conflation this pair exists to undo. Rare enough to stay
+    # silent almost always, and large enough to be worth naming when it is not.
+    if (( ${F[subagent_time]:-0} )); then
+      attrs+=" last_turn_subagent_time=\"$(ts_fmt_dur ${F[subagent_time]})\""
+    fi
     attrs+=" since_last_stop=\"$(ts_fmt_dur $((now - stop)))\""
   fi
 fi

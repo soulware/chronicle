@@ -31,7 +31,7 @@ would invalidate the prompt cache prefix on every turn.
 ```
 <time now="2026-08-26T09:44:31Z" session_start="2026-08-26T08:41:19Z"
       session_elapsed="1h03m" since_last_turn="4m12s"
-      last_turn_dur="2m18s" since_last_stop="1m54s"/>
+      last_turn_dur="2m18s" last_turn_tool_time="24s" since_last_stop="1m54s"/>
 ```
 
 Every number in it is read out of the transcript in one `jq` pass. Claude Code
@@ -49,6 +49,49 @@ two differ by a second or more, `last_turn_blocked` names the gap — an
 `AskUserQuestion` left sitting, or a permission prompt nobody answered. It falls
 inside the turn, so `since_last_stop` does not cover it either, and reading
 `durationMs` alone would drop it silently.
+
+What is left inside `durationMs` is the model generating and the machine
+working, with nothing separating them. `last_turn_tool_time` is the machine's
+half, measured from the gap between each `tool_use` and its `tool_result`. It is
+the one number in the stamp the model could not recover by looking at its own
+context: it can see every call it made and every result it got back, and none of
+them carry timing. Usually it is the small half — across the transcripts this
+was built on, tool time is about 8% of turn duration, so a twelve minute turn
+whose commands took thirty seconds went into generation, not into the build.
+
+Overlapping calls are merged rather than summed, because calls issued in one
+message run at the same time and adding their durations would report more
+machine time than the turn contains. A call with no result is one still in
+flight, and is left out rather than guessed at. A turn that ran no tools says
+nothing, since an explicit zero would appear on every conversational turn to
+report that nothing happened.
+
+`Agent` is excluded from that number and reported as `last_turn_subagent_time`
+instead. A subagent is another model generating, not the machine working, and it
+is the only tool whose cost runs to minutes rather than seconds — so folding it
+in would report a quarter of an hour at the build for a turn that never ran a
+command. On a real turn from these transcripts the split is the whole story:
+
+```
+last_turn_dur="17m36s" last_turn_tool_time="6.5s" last_turn_subagent_time="15m24s"
+```
+
+Seventeen minutes, of which the machine worked for six and a half seconds. Read
+as one number it would have said fifteen and a half minutes of commands running.
+Delegation is rare — 34 calls across the 99 transcripts this was built on — so
+the attribute is absent from almost every turn, which is what makes it worth
+reading when it appears.
+
+`AskUserQuestion` is excluded for a third reason: its span is the user deciding,
+which `last_turn_blocked` already reports, and counting it would file a pause at
+the keyboard as machine time. One wait cannot be excluded. A call held at a
+permission prompt records only when it was requested and when it returned, with
+nothing in between marking the wait for approval, so the prompt inflates the
+call it sits inside. Across 1048 real turns that leaves two where tool time
+exceeds `durationMs` — one of them by nineteen minutes, a command left sitting
+overnight. It is self-announcing rather than silent: `durationMs` discounts time
+blocked on the user and these spans do not, so tool time above the turn duration
+is itself the sign that a prompt went unanswered.
 
 A turn that died on an API error is named once and then drops out, because the
 next completed turn writes a `turn_duration` after it:

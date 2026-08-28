@@ -58,17 +58,70 @@ ts_emit() {
 # already be on disk, and counting it would report a gap of zero.
 TS_TX_JQ='
   def ts: .timestamp // empty;
+  # Envelope timestamps carry milliseconds, which fromdateiso8601 will not
+  # parse, so the fraction comes off and is added back.
+  def ep: (.[0:19] + "Z" | fromdateiso8601)
+        + (if (. | length) > 20 and (.[19:20] == ".")
+           then ((.[20:23] | tonumber) / 1000) else 0 end);
+  # Overlapping spans are merged rather than summed. Calls issued in one message
+  # run at the same time, so adding their durations would report more elapsed
+  # time than the turn contains.
+  def merge: sort_by(.[0])
+           | reduce .[] as $s ([];
+               if (length > 0 and .[-1][1] >= $s[0])
+               then .[0:-1] + [[ .[-1][0], ([.[-1][1], $s[1]] | max) ]]
+               else . + [$s] end)
+           | map(.[1] - .[0]) | add // 0;
+  def secs: (. * 10 | round / 10 | tostring);
   [ .[] | select(.timestamp) ] as $all
   | ($all | map(select(.subtype == "turn_duration")) | last) as $lastturn
   | (($lastturn | .timestamp) // "") as $stop
   | ($all | map(select(.type == "user"
                        and (.message.content | type) == "string"))) as $prompts
   | (($all | map(select(.subtype == "compact_boundary")) | last | ts) // "") as $bnd
+  | (($prompts | map(select($stop == "" or (.timestamp <= $stop))) | last | ts)
+     // "") as $prev
+  # The last turn is the span from that prompt to the stop, so a tool_use in
+  # the window is a call the last turn made. A call with no matching result is
+  # one still in flight or one the transcript never saw finish, and is left out
+  # rather than guessed at.
+  | ($all | map(select((.message.content | type) == "array")
+                | .timestamp as $t
+                | .message.content[]
+                | select(.type == "tool_result")
+                | {id: .tool_use_id, end: $t})
+          | INDEX(.id)) as $ends
+  | [ $all[]
+      | select(.type == "assistant" and (.message.content | type) == "array")
+      | .timestamp as $t
+      | select($stop != "" and $t <= $stop and ($prev == "" or $t > $prev))
+      | .message.content[]
+      | select(.type == "tool_use")
+      | ($ends[.id] // {}) as $e
+      | select($e.end != null)
+      | { name: .name, span: [ ($t | ep), ($e.end | ep) ] } ] as $calls
   | [ "first",     ($all | first | ts) ],
     [ "last_stop", $stop ],
     [ "last_dur",  (($lastturn.durationMs // 0) | tostring) ],
-    [ "last_prompt",
-      (($prompts | map(select($stop == "" or (.timestamp <= $stop))) | last | ts) // "") ],
+    [ "last_prompt", $prev ],
+    # Split rather than combined, because an Agent call is another model
+    # generating and every other call is the machine working. The two are
+    # merged within their own class and not against each other, so a turn that
+    # ran a command alongside a subagent reports both in full.
+    #
+    # AskUserQuestion is neither: its span is the user deciding. Counting it
+    # would put a two minute pause at the keyboard into a number that claims to
+    # be machine time, and would double-report it, since last_turn_blocked
+    # already names exactly that time. A permission prompt does the same to
+    # whichever call it sits inside, and that one cannot be separated out: the
+    # transcript records when a call started and when it returned, with nothing
+    # marking the wait for approval in between.
+    [ "tool_time",
+      ([ $calls[]
+         | select(.name != "Agent" and .name != "AskUserQuestion")
+         | .span ] | merge | secs) ],
+    [ "subagent_time",
+      ([ $calls[] | select(.name == "Agent") | .span ] | merge | secs) ],
     [ "api_error",
       (($all | map(select(.isApiErrorMessage == true))
              | map(select($stop == "" or (.timestamp > $stop))) | last | .error) // "") ],
