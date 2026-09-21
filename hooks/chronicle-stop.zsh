@@ -12,7 +12,7 @@
 # Emits systemMessage alone. A Stop hook that blocks can trap the session in a
 # loop, so this one never sets block.
 emulate -L zsh
-source "${0:A:h}/ts-common.zsh"
+source "${0:A:h}/chronicle-common.zsh"
 
 payload=$(cat)
 tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)

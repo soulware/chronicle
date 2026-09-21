@@ -11,7 +11,7 @@ emulate -L zsh
 D="${0:A:h}"
 export TS_STATE_DIR="$D/state-test"
 rm -rf "$TS_STATE_DIR"
-chmod +x "$D"/ts-*.zsh
+chmod +x "$D"/chronicle*.zsh
 
 typeset -i PASS=0 FAIL=0
 
@@ -53,13 +53,14 @@ TOOLR='{"session_id":"test-sess","tool_use_id":"toolu_T1","tool_name":"Bash","to
 PROMPT='{"session_id":"test-sess","prompt":"hello"}'
 
 print -r -- "=== the manifest is the only list, so it has to match the files ==="
-# install.sh and uninstall.sh both derive their work from ts-manifest.zsh.
+# install.sh and uninstall.sh both derive their work from chronicle-manifest.zsh.
 # Nothing else enumerates the hooks, so the one way this can go wrong now is a
 # script arriving without a line in the manifest, or a line outliving its
-# script. ts-common, ts-manifest and this file are not entry points.
-source "$D/ts-manifest.zsh"
+# script. chronicle-common, chronicle-manifest and this file are not entry
+# points, and chronicle.zsh has no dash for the glob to find.
+source "$D/chronicle-manifest.zsh"
 typeset -a on_disk in_manifest
-on_disk=( ${(f)"$(cd "$D" && print -l -- ts-*.zsh(:r) | grep -vE '^ts-(common|manifest|test|query)$')"} )
+on_disk=( ${(f)"$(cd "$D" && print -l -- chronicle-*.zsh(:r) | grep -vE '^chronicle-(common|manifest|test)$')"} )
 in_manifest=( ${(f)"$(ts_scripts)"} )
 typeset -a d_sorted m_sorted
 d_sorted=( ${(o)on_disk} ); m_sorted=( ${(o)in_manifest} )
@@ -88,13 +89,14 @@ done
 # The bug this guards: the pattern used to be derived from the manifest, so an
 # entry for a script that had since been deleted matched nothing, survived every
 # reinstall, and left Claude Code invoking a path that no longer existed once
-# per tool call. Retired names must still be recognised.
-for gone in ts-tool-post ts-tool-pre ts-stop-fail; do
+# per tool call. Retired names must still be recognised, and so must the ts-
+# prefix the current scripts carried before they were renamed.
+for gone in ts-tool-post ts-tool-pre ts-stop-fail ts-turn ts-session-start; do
   [[ "/home/.claude/hooks/$gone.zsh" =~ $re ]] && t_ok "strip still matches retired $gone" \
     || t_bad "strip still matches retired $gone" "a removed script would be left in settings.json"
 done
 t_absent "strip leaves other hooks alone" "/home/.claude/hooks/somebody-else.zsh" "$re"
-t_absent "strip is anchored at .zsh"      "/home/.claude/hooks/ts-turn.zsh.bak"  "$re"
+t_absent "strip is anchored at .zsh"      "/home/.claude/hooks/chronicle-turn.zsh.bak"  "$re"
 
 print -r -- "=== install and uninstall clean up after events we retired ==="
 # Both scripts used to visit only the events currently in the manifest, so an
@@ -108,6 +110,7 @@ cat > "$FH/.claude/settings.json" <<'SETTINGS'
   "hooks": {
     "PostToolUse": [{"hooks":[{"type":"command","command":"/old/.claude/hooks/ts-tool-post.zsh"}]}],
     "StopFailure": [{"hooks":[{"type":"command","command":"/old/.claude/hooks/ts-stop-fail.zsh"}]}],
+    "UserPromptSubmit": [{"hooks":[{"type":"command","command":"/old/.claude/hooks/ts-turn.zsh"}]}],
     "PreToolUse": [{"hooks":[{"type":"command","command":"/somebody/else/guard.sh"}]}]
   },
   "theme": "dark"
@@ -118,7 +121,8 @@ inst="$FH/.claude/settings.json"
 ours() { jq -r --arg e "$1" '.hooks[$e][]?.hooks[]?.command // empty' "$inst" 2>/dev/null }
 t_eq     "a retired event is cleared"      "$(ours PostToolUse)" ""
 t_eq     "and so is its state-only hook"   "$(ours StopFailure)" ""
-t_match  "the current hooks are installed" "$(ours UserPromptSubmit)" 'ts-turn\.zsh$'
+t_match  "the current hooks are installed" "$(ours UserPromptSubmit)" 'chronicle-turn\.zsh$'
+t_absent "replacing the ts- entry they had"  "$(ours UserPromptSubmit)" 'ts-turn'
 # The whole point of matching on a convention rather than a list is that it
 # must still be narrow enough to leave other people's hooks alone.
 t_eq     "another tool's hook is untouched" "$(ours PreToolUse)" "/somebody/else/guard.sh"
@@ -130,7 +134,7 @@ t_eq     "uninstall removes ours"          "$(ours UserPromptSubmit)" ""
 t_eq     "and still leaves theirs"         "$(ours PreToolUse)" "/somebody/else/guard.sh"
 
 print -r -- "=== duration formatter, every branch ==="
-source "$D/ts-common.zsh"
+source "$D/chronicle-common.zsh"
 for pair in "30:30.0s" "59:59.0s" "60:1m00s" "520:8m40s" "3599:59m59s" "3600:1h00m" "7300:2h01m"; do
   t_eq "fmt ${pair%%:*}" "$(ts_fmt_dur ${pair%%:*})" "${pair##*:}"
 done
@@ -148,14 +152,14 @@ P_TWO='{"type":"user","timestamp":"2026-08-27T09:10:00.000Z","message":{"content
 P_TURN2='{"type":"system","subtype":"turn_duration","timestamp":"2026-08-27T09:12:30.000Z","durationMs":150000}'
 
 TX="$TS_STATE_DIR/turn.jsonl"
-turn_ctx() { ctx_of "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/ts-turn.zsh")" }
-turn_msg() { msg_of "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/ts-turn.zsh")" }
+turn_ctx() { ctx_of "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/chronicle-turn.zsh")" }
+turn_msg() { msg_of "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/chronicle-turn.zsh")" }
 
 print -r -- "=== the turn stamp reads the record instead of its own notes ==="
 mkdir -p "$TS_STATE_DIR"
 mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
 c=$(turn_ctx)
-t_json  "turn emits valid json"         "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t}' | "$D/ts-turn.zsh")"
+t_json  "turn emits valid json"         "$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t}' | "$D/chronicle-turn.zsh")"
 t_match "carries now"                   "$c" '<time now="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z"'
 # The session began when the transcript did, not when this hook was installed.
 t_eq    "session_start is the first record" "$(attr session_start "$c")" "2026-08-27T09:00:00Z"
@@ -215,7 +219,7 @@ mk_tx "$TX" "$P_FIRST" "$P_ONE" "$P_TURN1" "$P_TWO" "$P_TURN2"
 t_absent "a turn with no tools says nothing" "$(turn_ctx)" 'last_turn_tool_time'
 
 # A call with no result is one still in flight or one the transcript never saw
-# finish. ts-query drops those rather than guess at an end, and so does this.
+# finish. chronicle.zsh drops those rather than guess at an end, and so does this.
 mk_tx "$TX" "$P_FIRST" "$P_ONE" "$TC1" "$P_TURN1"
 t_absent "an unfinished call is not guessed at" "$(turn_ctx)" 'last_turn_tool_time'
 
@@ -302,7 +306,7 @@ print -r -- "=== turns are delimited by the record, not by the prompts ==="
 # from TS_JQ_SPANS, so the number it prints for a turn is the number the stamp
 # printed for that turn while it was the last one.
 TQ="$TS_STATE_DIR/turns-transcript.jsonl"
-q_turns() { zsh "$D/ts-query.zsh" turns --transcript "$TQ" "$@" 2>&1 }
+q_turns() { zsh "$D/chronicle.zsh" turns --transcript "$TQ" "$@" 2>&1 }
 mk_tx "$TQ" "$P_ONE" \
   '{"type":"assistant","timestamp":"2026-08-27T09:01:10.000Z","message":{"content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"cargo test"}}]}}' \
   '{"type":"user","timestamp":"2026-08-27T09:01:40.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"u1","is_error":false}]}}' \
@@ -343,7 +347,7 @@ mk_tx "$TQ" "$P_ONE" \
   '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"x3","name":"Agent","input":{"subagent_type":"Explore"}}]}}' \
   '{"type":"user","timestamp":"2026-08-27T09:02:30.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"x3","is_error":false}]}}' \
   "$P_TURN1"
-stamp=$(ctx_of "$(jq -nc --arg t "$TQ" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/ts-turn.zsh")")
+stamp=$(ctx_of "$(jq -nc --arg t "$TQ" '{session_id:"t",transcript_path:$t,prompt:"p"}' | "$D/chronicle-turn.zsh")")
 qrow=$(q_turns | tail -1)
 t_eq "the query agrees with the stamp on tool time" \
   "$(print -r -- "$qrow" | awk '{print $3}')" "$(attr last_turn_tool_time "$stamp")"
@@ -372,7 +376,7 @@ mk_tx "$TX" "$P_FIRST" "$P_ONE" \
 t_absent "and is not reported again"    "$(turn_ctx)" '<compaction'
 
 print -r -- "=== stop closes the turn in the scrollback and nowhere else ==="
-out=$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,hook_event_name:"Stop"}' | "$D/ts-stop.zsh")
+out=$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,hook_event_name:"Stop"}' | "$D/chronicle-stop.zsh")
 t_json   "stop emits valid json"        "$out"
 t_match  "stop stamps the time"         "$(msg_of "$out")" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z'
 t_match  "stop reports session elapsed" "$(msg_of "$out")" 'into session'
@@ -383,7 +387,7 @@ t_eq     "stop sends the model nothing" "$(ctx_of "$out")" ""
 t_eq     "and leaves nothing behind"    "$(ls "$TS_STATE_DIR" | grep -c '^t$')" "0"
 
 print -r -- "=== SessionStart names the commit doing the stamping ==="
-out=$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,hook_event_name:"SessionStart",source:"resume"}' | "$D/ts-session-start.zsh")
+out=$(jq -nc --arg t "$TX" '{session_id:"t",transcript_path:$t,hook_event_name:"SessionStart",source:"resume"}' | "$D/chronicle-session-start.zsh")
 c=$(ctx_of "$out")
 t_eq     "session start names its event" "$(evt_of "$out")" "SessionStart"
 t_eq     "the source is carried"         "$(attr session_source "$c")" "resume"
@@ -407,11 +411,11 @@ TR="$TS_STATE_DIR/fake-transcript.jsonl"
   print -r -- '{"type":"system","subtype":"turn_duration","timestamp":"2026-08-26T09:58:00.000Z","durationMs":1200}'
   print -r -- '{"type":"file-history-snapshot","message":{"content":"no timestamp at all"}}'
 } > "$TR"
-out=$(jq -nc --arg t "$TR" '{session_id:"t",transcript_path:$t,hook_event_name:"PreCompact",trigger_reason:"manual"}' | "$D/ts-precompact.zsh")
+out=$(jq -nc --arg t "$TR" '{session_id:"t",transcript_path:$t,hook_event_name:"PreCompact",trigger_reason:"manual"}' | "$D/chronicle-precompact.zsh")
 t_json  "precompact emits valid json"  "$out"
 t_match "precompact reports the span"  "$(msg_of "$out")" 'compacting .* 2 prompts'
 t_eq    "and writes nothing down"      "$(ls "$TS_STATE_DIR" | grep -c '^t$')" "0"
-out=$(jq -nc --arg t "$TR" '{session_id:"t",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/ts-postcompact.zsh")
+out=$(jq -nc --arg t "$TR" '{session_id:"t",transcript_path:$t,hook_event_name:"PostCompact"}' | "$D/chronicle-postcompact.zsh")
 t_json  "postcompact emits valid json" "$out"
 t_match "seam reaches the scrollback"  "$(msg_of "$out")" 'compacted'
 # This event rejects hookSpecificOutput, which is why the turn stamp reports the
@@ -426,15 +430,15 @@ mk_tx "$TX" "$P_FIRST" \
 t_absent "no quote leaks into the tag"  "$(turn_ctx)" '=""[^ /]'
 
 print -r -- "=== malformed input must not break the turn ==="
-out=$(print -r -- 'not json' | "$D/ts-turn.zsh"); rc=$?
+out=$(print -r -- 'not json' | "$D/chronicle-turn.zsh"); rc=$?
 t_eq   "exits clean"                    "$rc" "0"
 t_json "still emits valid json"         "$out"
-out=$(jq -nc '{session_id:"t",transcript_path:"/nope/missing.jsonl"}' | "$D/ts-turn.zsh"); rc=$?
+out=$(jq -nc '{session_id:"t",transcript_path:"/nope/missing.jsonl"}' | "$D/chronicle-turn.zsh"); rc=$?
 t_eq   "a missing transcript exits clean" "$rc" "0"
 t_match "and still stamps the time"     "$(ctx_of "$out")" '<time now="'
 
 print -r -- "=== a missing transcript is not an error ==="
-out=$(jq -nc '{session_id:"t",transcript_path:"/nope/missing.jsonl",hook_event_name:"PreCompact",trigger:"auto"}' | "$D/ts-precompact.zsh"); rc=$?
+out=$(jq -nc '{session_id:"t",transcript_path:"/nope/missing.jsonl",hook_event_name:"PreCompact",trigger:"auto"}' | "$D/chronicle-precompact.zsh"); rc=$?
 t_eq "precompact exits clean"           "$rc" "0"
 
 print -r -- "=== queries read the transcript and never write to it ==="
@@ -452,7 +456,7 @@ QT="$TS_STATE_DIR/query-transcript.jsonl"
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:20:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"c3","is_error":false}]}}'
   print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:30:00.000Z","message":{"content":[{"type":"tool_use","id":"c4","name":"Bash","input":{"command":"still running"}}]}}'
 } > "$QT"
-Q=( "$D/ts-query.zsh" --transcript "$QT" )
+Q=( "$D/chronicle.zsh" --transcript "$QT" )
 
 out=$("${Q[@]}" recent 'cargo test')
 t_match "recent counts prefix matches"    "$out" '^2 calls matching'
@@ -498,7 +502,7 @@ ST="$TS_STATE_DIR/sidechain-transcript.jsonl"
   print -r -- '{"type":"assistant","isSidechain":true,"timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"echo probe"}}]}}'
   print -r -- '{"type":"user","isSidechain":true,"timestamp":"2026-08-27T09:00:03.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s1","is_error":false}]}}'
 } > "$ST"
-out=$("$D/ts-query.zsh" --transcript "$ST" recent echo 2>&1)
+out=$("$D/chronicle.zsh" --transcript "$ST" recent echo 2>&1)
 t_match "a subagent transcript reads normally" "$out" '^1 call matching'
 t_match "with its duration intact"             "$out" '3\.0s'
 
@@ -515,7 +519,7 @@ FT="$TS_STATE_DIR/file-transcript.jsonl"
   print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:09:00.000Z","message":{"content":[{"type":"tool_use","id":"f3","name":"Bash","input":{"command":"sed -i s/a/b/ /repo/src/other.rs"}}]}}'
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:09:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"f3","is_error":false}]}}'
 } > "$FT"
-FQ=( "$D/ts-query.zsh" --transcript "$FT" )
+FQ=( "$D/chronicle.zsh" --transcript "$FT" )
 
 out=$("${FQ[@]}" touched src/main.rs)
 t_match "a suffix matches the absolute path" "$out" '^2 operations'
@@ -536,21 +540,30 @@ MT="$TS_STATE_DIR/meta-transcript.jsonl"
 {
   print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"cargo test"}}]}}'
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:00:05.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m1","is_error":false}]}}'
-  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:01:00.000Z","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"zsh hooks/ts-query.zsh recent cargo test"}}]}}'
+  print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:01:00.000Z","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"zsh hooks/chronicle.zsh recent cargo test"}}]}}'
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:01:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m2","is_error":false}]}}'
 } > "$MT"
-out=$("$D/ts-query.zsh" --transcript "$MT" recent cargo --contains)
+out=$("$D/chronicle.zsh" --transcript "$MT" recent cargo --contains)
 t_match "the tool excludes its own calls"   "$out" '^1 call matching'
 t_match "and says that it did"              "$out" 'excluded'
-out=$("$D/ts-query.zsh" --transcript "$MT" recent cargo --contains --include-meta)
+out=$("$D/chronicle.zsh" --transcript "$MT" recent cargo --contains --include-meta)
 t_match "include-meta keeps them"           "$out" '^2 calls matching'
 # Work on the script is not a query of it, so the exclusion has to distinguish
-# invoking ts-query from merely naming the file.
-print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"m3","name":"Bash","input":{"command":"cat -n hooks/ts-query.zsh"}}]}}' >> "$MT"
+# invoking chronicle from merely naming the file.
+print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:02:00.000Z","message":{"content":[{"type":"tool_use","id":"m3","name":"Bash","input":{"command":"cat -n hooks/chronicle.zsh"}}]}}' >> "$MT"
 print -r -- '{"type":"user","timestamp":"2026-08-27T09:02:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m3","is_error":false}]}}' >> "$MT"
-out=$("$D/ts-query.zsh" --transcript "$MT" recent cat --contains)
+out=$("$D/chronicle.zsh" --transcript "$MT" recent cat --contains)
 t_match "reading the script is not a query" "$out" '^1 call matching'
 t_absent "so nothing is excluded for it"    "$out" 'excluded'
+# Transcripts written before the rename hold the old name, and a directory
+# called chronicle is not the tool.
+print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:03:00.000Z","message":{"content":[{"type":"tool_use","id":"m4","name":"Bash","input":{"command":"zsh hooks/ts-query.zsh last cargo"}}]}}' >> "$MT"
+print -r -- '{"type":"user","timestamp":"2026-08-27T09:03:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m4","is_error":false}]}}' >> "$MT"
+print -r -- '{"type":"assistant","timestamp":"2026-08-27T09:04:00.000Z","message":{"content":[{"type":"tool_use","id":"m5","name":"Bash","input":{"command":"cd ~/workspace/chronicle && cargo build --last"}}]}}' >> "$MT"
+print -r -- '{"type":"user","timestamp":"2026-08-27T09:04:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m5","is_error":false}]}}' >> "$MT"
+out=$("$D/chronicle.zsh" --transcript "$MT" recent cargo --contains)
+t_match "a call under the old name is excluded" "$out" '2 calls of chronicle itself'
+t_match "work in a chronicle directory is not"  "$out" '^2 calls matching'
 
 print -r -- "=== intent is a caption, not a key ==="
 # Bash and Agent calls carry a model-authored description. It is a self-report
@@ -568,7 +581,7 @@ IT="$TS_STATE_DIR/intent-transcript.jsonl"
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:03:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i4","is_error":false}]}}'
   print -r -- '{"type":"user","timestamp":"2026-08-27T09:02:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"i3","is_error":false}]}}'
 } > "$IT"
-IQ=( "$D/ts-query.zsh" --transcript "$IT" )
+IQ=( "$D/chronicle.zsh" --transcript "$IT" )
 
 # `last` reads a row into named fields; one too few and the command silently
 # absorbs the caption, which still looks like a plausible command.
@@ -603,7 +616,7 @@ t_eq    "an unmatched word exits non-zero"   "$rc" "1"
 # as a test run. This is the limitation, asserted so it stays known.
 t_absent "a caption hides secondary actions" "$("${IQ[@]}" intents 'Run the test suite')" 'patch\.py'
 
-out=$("$D/ts-query.zsh" --transcript /nope/missing.jsonl recent x 2>&1); rc=$?
+out=$("$D/chronicle.zsh" --transcript /nope/missing.jsonl recent x 2>&1); rc=$?
 t_eq "an unreadable transcript exits 2"   "$rc" "2"
 
 print -r -- ""

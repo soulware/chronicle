@@ -18,17 +18,19 @@ H="$HOME/.claude/hooks"
 S="$HOME/.claude/settings.json"
 
 # Which events exist and which script serves each is written down once, in
-# hooks/ts-manifest.zsh. Everything below is derived from it.
-source "$SRC/ts-manifest.zsh"
+# hooks/chronicle-manifest.zsh. Everything below is derived from it.
+source "$SRC/chronicle-manifest.zsh"
 
 # Linked, not copied, so edits in this repo take effect on the next hook fire.
-# ts-common.zsh is found through zsh's :A modifier, which resolves the symlink
+# chronicle-common.zsh is found through zsh's :A modifier, which resolves the symlink
 # back to this directory, so only the entry points need linking.
 mkdir -p "$H"
-chmod +x "$SRC"/ts-*.zsh
+chmod +x "$SRC"/chronicle*.zsh
 # A script dropped from the manifest leaves a symlink behind that now dangles,
 # and a dangling hook is an error on every tool call rather than a silent no-op.
-for old in "$H"/ts-*.zsh(N); do
+# ts- is the prefix the scripts carried before they were renamed, so an install
+# from then leaves a full set of these.
+for old in "$H"/(ts|chronicle)-*.zsh(N); do
   [[ -L "$old" && ! -e "$old" ]] && rm -f "$old"
 done
 

@@ -6,7 +6,7 @@ H="$HOME/.claude/hooks"
 S="$HOME/.claude/settings.json"
 
 # The same manifest install.sh reads, so the two can never fall out of step.
-source "${0:A:h}/hooks/ts-manifest.zsh"
+source "${0:A:h}/hooks/chronicle-manifest.zsh"
 
 # Every event is visited, not only the ones currently in the manifest: a
 # retired event's entry would otherwise survive the uninstall. An event
@@ -24,7 +24,9 @@ jq -e . "$S.new" > /dev/null
 mv "$S.new" "$S"
 
 for s in ${(f)"$(ts_scripts)"}; do
-  rm -f "$H/$s.zsh"
+  # The second name is the one the script had before the rename, left behind
+  # by an install that was never rerun.
+  rm -f "$H/$s.zsh" "$H/ts-${s#chronicle-}.zsh"
 done
 # ts-common.zsh is only present if an older copy-based install put it there.
 rm -f "$H/ts-common.zsh"

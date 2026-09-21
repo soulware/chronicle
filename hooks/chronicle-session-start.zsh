@@ -8,7 +8,7 @@
 # worst direction: a wrong guess finds no file and reads as "there is nothing
 # to query" rather than "that was the wrong path".
 emulate -L zsh
-source "${0:A:h}/ts-common.zsh"
+source "${0:A:h}/chronicle-common.zsh"
 
 payload=$(cat)
 tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
@@ -24,7 +24,7 @@ ctx="<time now=\"$now\" session_source=\"$src\""
 ctx+="/>"
 
 if [[ -n "$tp" ]]; then
-  ctx+="<transcript path=\"$tp\" query=\"${0:A:h}/ts-query.zsh\">"
+  ctx+="<transcript path=\"$tp\" query=\"${0:A:h}/chronicle.zsh\">"
   ctx+="How long a command took, how often it has been run, whether it passed "
   ctx+="last time, and when a file was last changed are all answerable from "
   ctx+="here, including for turns that have since been compacted away."

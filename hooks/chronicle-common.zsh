@@ -56,7 +56,7 @@ ts_emit() {
 # last_prompt is deliberately the last prompt at or before the last
 # turn_duration: by the time UserPromptSubmit fires the current prompt may
 # already be on disk, and counting it would report a gap of zero.
-# The span arithmetic the turn stamp and ts-query both need, kept in one place
+# The span arithmetic the turn stamp and chronicle.zsh both need, kept in one place
 # so the two can never disagree about what counts as machine time. A subagent
 # excluded from the stamp but counted by the query would have them answering the
 # same question two different ways, which is worse than either answer.

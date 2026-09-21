@@ -13,7 +13,7 @@
 # hooks per tool call this replaces.
 emulate -L zsh
 set -o pipefail
-source "${0:A:h}/ts-common.zsh"
+source "${0:A:h}/chronicle-common.zsh"
 
 payload=$(cat)
 tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)

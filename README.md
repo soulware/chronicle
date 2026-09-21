@@ -105,7 +105,7 @@ once that the transcript can be read:
 
 ```
 <time now="2026-08-26T09:44:31Z" session_source="resume" chronicle="03d949b"/>
-<transcript path="/Users/…/<session>.jsonl" query="…/hooks/ts-query.zsh">How long
+<transcript path="/Users/…/<session>.jsonl" query="…/hooks/chronicle.zsh">How long
 a command took, how often it has been run, whether it passed last time, and when
 a file was last changed are all answerable from here, including for turns that
 have since been compacted away.</transcript>
@@ -132,17 +132,17 @@ The stamps answer *when* and *how long since*. Everything else is a question
 about the past, and the past is on disk: every tool call, its command, its
 outcome and a millisecond timestamp, written whether these hooks run or not.
 
-`hooks/ts-query.zsh` reads it. Nothing here writes, keeps state, or needs a key
+`hooks/chronicle.zsh` reads it. Nothing here writes, keeps state, or needs a key
 registry:
 
 ```
-ts-query touched <path>                   every read and write of a file
-ts-query intents [words] [--within 1h]    what the work was said to be about
-ts-query recent <prefix> [--within 30m]   how often, and when
-ts-query last <prefix>                    outcome and age of the last run
-ts-query transitions <prefix>             where pass and fail changed places
-ts-query turns [--within 2h]              each turn, and where its time went
-ts-query elapsed                          span and size of the transcript
+chronicle touched <path>                   every read and write of a file
+chronicle intents [words] [--within 1h]    what the work was said to be about
+chronicle recent <prefix> [--within 30m]   how often, and when
+chronicle last <prefix>                    outcome and age of the last run
+chronicle transitions <prefix>             where pass and fail changed places
+chronicle turns [--within 2h]              each turn, and where its time went
+chronicle elapsed                          span and size of the transcript
 ```
 
 `turns` is the only one whose unit is the turn. Every other query here asks
@@ -159,7 +159,7 @@ not be asked about after the fact:
 ```
 
 It reads a turn the way the stamp does, because it is the same arithmetic:
-`TS_JQ_SPANS` in `ts-common.zsh` holds the timestamp parse, the span merge and
+`TS_JQ_SPANS` in `chronicle-common.zsh` holds the timestamp parse, the span merge and
 the Agent/AskUserQuestion exclusions, and both the stamp and this query source
 it rather than copying it. A subagent excluded from one and counted by the other
 would have them answering the same question two different ways, which is worse
@@ -181,7 +181,7 @@ normalisation, no coarseness to tune. `Bash` carries one free-form string, which
 is why every other query here has to guess.
 
 ```
-2 operations on "ts-turn.zsh"
+2 operations on "chronicle-turn.zsh"
   2026-08-27T09:35:59Z  Write
   2026-08-27T09:42:18Z  Edit    +17 -1     modified by user
 ```
@@ -230,7 +230,7 @@ that is a fact about the session rather than an error.
 Every path out is bounded. An unbounded row is how a query tool becomes the
 `cat` it was built to prevent, and 682K of transcript is about 180k tokens.
 
-Calls that invoked `ts-query` itself are excluded, because querying is done by
+Calls that invoked `chronicle.zsh` itself are excluded, because querying is done by
 running commands and a query about commands otherwise counts its own history.
 What was dropped is always reported, and only exclusions the query would have
 returned are counted. `--include-meta` keeps them. File queries need none of
@@ -324,14 +324,16 @@ second copy, and leaves every other hook alone. It also clears entries for
 events chronicle no longer installs and symlinks left by scripts it no longer
 builds — either of which Claude Code reports as a hook error on every fire.
 
-`hooks/ts-manifest.zsh` pairs each event with the script that serves it, and is
+`hooks/chronicle-manifest.zsh` pairs each event with the script that serves it, and is
 the only place that list is written down. `install.sh` and `uninstall.sh` derive
 what to link and what to remove from it. The pattern that recognises chronicle's
 entries in `settings.json` is deliberately the naming convention rather than the
-manifest: an installer has to recognise its own past, not only its present.
+manifest: an installer has to recognise its own past, not only its present. That
+past includes the `ts-` prefix these scripts carried before they were renamed,
+so re-running `install.sh` over an install from then replaces it.
 
 `install.sh` symlinks the entry points into `~/.claude/hooks/`, so editing this
-repo changes hook behaviour on the next fire. `ts-common.zsh` is reached through
+repo changes hook behaviour on the next fire. `chronicle-common.zsh` is reached through
 zsh's `:A` modifier, which resolves the symlink back to this directory, so it
 stays where it is. Keep this checkout in place while the hooks are installed.
 
@@ -345,7 +347,7 @@ arbitrary code execution and that is Claude Code rewriting its own config.
 ## Test
 
 ```
-zsh hooks/ts-test.zsh
+zsh hooks/chronicle-test.zsh
 ```
 
 Asserts on what each hook emits and exits non-zero on any failure, so it can

@@ -8,7 +8,7 @@
 # reported: it is the one fact here the transcript does not hold, and carrying
 # it would mean keeping a state file for a single attribute.
 emulate -L zsh
-source "${0:A:h}/ts-common.zsh"
+source "${0:A:h}/chronicle-common.zsh"
 
 payload=$(cat)
 session=$(print -r -- "$payload" | jq -r '.session_id // "unknown"' 2>/dev/null)

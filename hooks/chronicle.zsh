@@ -48,9 +48,9 @@ setopt pipefail extendedglob
 
 # For TS_JQ_SPANS. The turn stamp and this tool have to agree about what counts
 # as machine time, so the arithmetic is sourced rather than copied.
-source "${0:A:h}/ts-common.zsh"
+source "${0:A:h}/chronicle-common.zsh"
 
-die() { print -r -- "ts-query: $1" >&2; exit 2 }
+die() { print -r -- "chronicle: $1" >&2; exit 2 }
 
 # The single copy of what this tool answers. --help prints it to stdout and
 # succeeds; a bare invocation prints it to stderr and fails, because one is a
@@ -61,8 +61,8 @@ die() { print -r -- "ts-query: $1" >&2; exit 2 }
 # the reader who needs them is the one holding the output.
 usage() {
   cat <<'USAGE'
-usage: ts-query <query> [arg] [--within 30m] [--contains] [--include-meta]
-                [--transcript PATH]
+usage: chronicle <query> [arg] [--within 30m] [--contains] [--include-meta]
+                 [--transcript PATH]
 
   intents [words]       what the work was said to be about
   touched <path>        every read and write of a file, with +/- line counts
@@ -289,7 +289,7 @@ rows=$(jq -r --argjson _ 0 "$JQ_CALLS" -s "$transcript" 2>/dev/null) \
 iso_ep() { local -x TZ=UTC; strftime -r '%Y-%m-%dT%H:%M:%S' "${1%%.*}" 2>/dev/null }
 
 # Prefix match is on the command for Bash and on the tool name otherwise, so
-# `ts-query recent Read` works alongside `ts-query recent 'cargo test'`.
+# `chronicle recent Read` works alongside `chronicle recent 'cargo test'`.
 #
 # --contains matches anywhere instead. A prefix is the better default because
 # it is predictable and cannot half-match, but it misses work buried inside a
@@ -300,13 +300,15 @@ iso_ep() { local -x TZ=UTC; strftime -r '%Y-%m-%dT%H:%M:%S' "${1%%.*}" 2>/dev/nu
 # A call that invoked this tool is the tool looking at itself, and counting it
 # inflates every answer the more the tool is used. Recognised by the script
 # name next to one of its own verbs, which is a heuristic: it deliberately does
-# not match `cat hooks/ts-query.zsh`, which is work on the file rather than a
-# query. --include-meta keeps them, and the count of what was dropped is always
+# not match `cat hooks/chronicle.zsh`, which is work on the file rather than a
+# query, and it stops at `&` so that `cd chronicle && git log --last` is not one
+# either. ts-query is the name this script had before, and transcripts written
+# then still hold it. --include-meta keeps them, and the count of what was dropped is always
 # reported, because a query that silently discards rows is the same failure as
 # a stamp that silently stops firing.
 typeset -i META=0
 is_meta() {
-  [[ "$1" =~ 'ts-query(\.zsh)?[^;|]*(touched|recent|last|transitions|elapsed)' ]]
+  [[ "$1" =~ '(ts-query(\.zsh)?|chronicle\.zsh|(^|[[:space:]])chronicle)[[:space:]][^;|&]*(touched|recent|last|transitions|elapsed)' ]]
 }
 
 matches() {
@@ -347,7 +349,7 @@ meta_note() {
               print x
             done | wc -l | tr -d " ")
   (( n && ! ${include_meta:-0} )) &&
-    print -r -- "($n call$( (( n == 1 )) || print s ) of ts-query itself excluded; --include-meta to keep)"
+    print -r -- "($n call$( (( n == 1 )) || print s ) of chronicle itself excluded; --include-meta to keep)"
   return 0
 }
 
@@ -394,7 +396,7 @@ touched)
   # both to PATH and to the function search path, so assigning either breaks
   # command lookup for the rest of the script.
   want=${2:-}
-  [[ -n "$want" ]] || die "usage: ts-query touched <path>"
+  [[ -n "$want" ]] || die "usage: chronicle touched <path>"
   frows=$(jq -r "$JQ_FILES" -s "$transcript" 2>/dev/null) || die "could not parse $transcript"
   matched=$(print -r -- "$frows" | while IFS=$'\t' read -r ts tool f a d um; do
     [[ -n "$ts" ]] || continue

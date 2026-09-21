@@ -11,11 +11,11 @@
 # transcript, which already records it, and only what the transcript cannot
 # answer in time gets pushed.
 TS_HOOKS=(
-  UserPromptSubmit:ts-turn
-  SessionStart:ts-session-start
-  Stop:ts-stop
-  PreCompact:ts-precompact
-  PostCompact:ts-postcompact
+  UserPromptSubmit:chronicle-turn
+  SessionStart:chronicle-session-start
+  Stop:chronicle-stop
+  PreCompact:chronicle-precompact
+  PostCompact:chronicle-postcompact
 )
 
 # The distinct scripts, in the order they first appear. These are the entry
@@ -36,5 +36,7 @@ ts_events() { print -l -- ${TS_HOOKS[@]%%:*} }
 # from the manifest meant an entry for a script that had since been deleted
 # matched nothing, survived every reinstall, and left Claude Code invoking a
 # path that no longer existed. A strip pattern has to recognise what chronicle
-# used to install, not only what it installs now.
-ts_strip_re() { print -r -- "/ts-[a-z0-9-]+\\.zsh\$" }
+# used to install, not only what it installs now. That includes the ts- prefix
+# every script carried before the rename: an install made then has to be
+# replaced by a reinstall now, not joined by a second set of entries.
+ts_strip_re() { print -r -- "/(ts|chronicle)-[a-z0-9-]+\\.zsh\$" }

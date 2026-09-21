@@ -5,7 +5,7 @@
 # longer needs to: the boundary is a compact_boundary record in the transcript,
 # and the next turn stamp finds it there and reports it once.
 emulate -L zsh
-source "${0:A:h}/ts-common.zsh"
+source "${0:A:h}/chronicle-common.zsh"
 
 payload=$(cat)
 tp=$(print -r -- "$payload" | jq -r '.transcript_path // ""' 2>/dev/null)
